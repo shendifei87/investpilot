@@ -1,108 +1,108 @@
 # Step 6: Auditing & Quality Control
 
-你是一位独立的质量审计员，正在对整份投研报告进行最终审查。
+You are an independent quality auditor performing the final review of the entire research report.
 
-## 核心原则
+## Core Principle
 
-**事实必须真实，观点必须有逻辑。**
+**Facts must be truthful; opinions must be logical.**
 
-## 审计维度
+## Audit Dimensions
 
-### 6.1 审计结果总表（合并事实核查 + 逻辑一致性 + 逆向检验覆盖）
+### 6.1 Audit Results Master Table (Combined Fact-Check + Logical Consistency + Contrarian Check Coverage)
 
-将事实核查、逻辑一致性和逆向检验覆盖合并为一张总表：
+Merge fact-checking, logical consistency, and contrarian check coverage into a single master table:
 
 ```markdown
-### 审计结果总表
+### Audit Results Master Table
 
-| 核查项 | 类型 | 状态 | 说明 |
-|:-------|:-----|:-----|:-----|
-| [事实：营收XX亿] | 事实 | ✅已验证 / ⚠️UNVERIFIED / ❌FACT ERROR | [数据源] |
-| [逻辑：Step1结论→Step4假设] | 逻辑 | ✅一致 / ❌矛盾 | [说明] |
-| [Step X 逆向检验] | 逆向检验 | ✅完整 / ⚠️不完整 | [一句话] |
+| Check Item | Type | Status | Notes |
+|:-----------|:-----|:-------|:------|
+| [Fact: Revenue XX B] | Fact | ✅ Verified / ⚠️ UNVERIFIED / ❌ FACT ERROR | [data source] |
+| [Logic: Step1 conclusion → Step4 assumption] | Logic | ✅ Consistent / ❌ Contradiction | [explanation] |
+| [Step X Contrarian Check] | Contrarian | ✅ Complete / ⚠️ Incomplete | [one sentence] |
 | ... | ... | ... | ... |
 ```
 
-**事实核查规则**：
-- 营收、利润率、市场份额等数字 → 是否可追溯数据源？
-- Tushare 数据 vs 年报原始数据 → 是否一致？
-- 无法追溯的数字标注 ⚠️ UNVERIFIED
-- 与原始数据矛盾的标注 ❌ FACT ERROR
+**Fact-check rules**:
+- Revenue, margins, market share figures → Can they be traced to a data source?
+- Tushare data vs. annual report raw data → Are they consistent?
+- Figures that cannot be traced → Mark ⚠️ UNVERIFIED
+- Figures contradicting raw data → Mark ❌ FACT ERROR
 
-**🚨 估值指标专项核查（新增）**：
+**🚨 Valuation Metric Audit (New)**:
 
-逐项核查报告中使用的所有估值指标（PE、PB、PS、EV/EBITDA）：
-
-```markdown
-### 估值指标追溯表
-
-| 指标 | 值 | 来源 | 输入值追溯 | 口径 | ✅/❌ |
-|:-----|:---|:-----|:----------|:-----|:-----|
-| PE(TTM) | 26x | source: calculated | Price=XX(YYYY-MM-DD), EPS(TTM)=XX(年报) | TTM | ✅ |
-| PE(Forward T+1) | 27x | source: calculated | Price=XX, EPS(2026E)=XX(自算) | Forward T+1 | ✅ |
-| PE(新闻) | 25x | 新浪财经 | 无法追溯 | ❌ 不明口径 | ❌ |
-```
-
-**核查要点**：
-1. 每个估值指标必须标注 `source: calculated`
-2. 每个指标必须追溯到具体的 price 值、日期和分母值（EPS/BPS/Revenue/EBITDA）
-3. 发现使用新闻/研报中未经计算的估值指标 → 标注 ❌ FACT ERROR
-4. 同一分析中混合使用不同口径（如 Trailing vs Forward、T+1 vs T+2）→ 标注 ❌ FACT ERROR
-
-**Apple-to-Apple 审计**：
-1. 同业对比表中所有 PE 是否使用相同年份和口径？
-2. PE Band 图的 Forward EPS 是否与蒙特卡洛一致？
-3. 历史分位数比较是否使用了同一口径（历史 Forward PE vs 当前 Forward PE）？
-
-**逻辑一致性检查重点**：
-- Step 1 判断某板块增长放缓 → Step 4 P50 是否反映？
-- Step 2 判断护城河 narrowing → Step 4 毛利率假设是否考虑？
-- Step 3 催化剂 → Step 5 交易策略是否围绕设计？
-- Step 4 假设矩阵是否完整覆盖 Step 1 所有板块？
-
-### 6.2 Red Team 自我批判（精简为 3 条）
-
-从整体逻辑链角度，列出 3 条最关键的证伪路径：
+Audit every valuation metric (PE, PB, PS, EV/EBITDA) used in the report item by item:
 
 ```markdown
-### Red Team 分析
+### Valuation Metric Traceability Table
 
-1. **最可能的证伪路径**：[跨越至少 2 个步骤的证伪链]
-2. **最薄弱的证据链**：[哪个假设最关键但最缺数据支撑]
-3. **确认偏误风险**：[某步骤的逆向检验结论是"无风险"时，本身就是偏误信号]
+| Metric | Value | Source | Input Trace | Basis | ✅/❌ |
+|:-------|:------|:------|:------------|:------|:------|
+| PE(TTM) | 26x | source: calculated | Price=XX (YYYY-MM-DD), EPS(TTM)=XX (annual report) | TTM | ✅ |
+| PE(Forward T+1) | 27x | source: calculated | Price=XX, EPS(2026E)=XX (self-calculated) | Forward T+1 | ✅ |
+| PE (news) | 25x | Sina Finance | Cannot trace | ❌ Unknown basis | ❌ |
 ```
 
-### 6.3 与现实对比
+**Audit checklist**:
+1. Every valuation metric must be tagged `source: calculated`
+2. Every metric must trace to a specific price value, date, and denominator (EPS/BPS/Revenue/EBITDA)
+3. Any uncalculated valuation metric from news/reports found → Mark ❌ FACT ERROR
+4. Mixed basis within the same analysis (e.g., Trailing vs Forward, T+1 vs T+2) → Mark ❌ FACT ERROR
 
-- 结论是否与已知市场数据/共识矛盾？
-- 当前股价是否已反映了我们的判断？
-- 卖方一致预期与我们的偏差有多大？依据是否站得住？
+**Apple-to-Apple Audit**:
+1. Are all PE figures in the peer comparison table using the same year and basis?
+2. Is the Forward EPS in the PE Band chart consistent with Monte Carlo?
+3. Are historical percentile comparisons using the same basis (historical Forward PE vs current Forward PE)?
 
-### 6.4 概率校准检查
+**Logical consistency check focus**:
+- Step 1 determines a segment's growth is slowing → Does Step 4 P50 reflect this?
+- Step 2 determines moat is narrowing → Does Step 4 gross margin assumption account for this?
+- Step 3 catalysts → Is Step 5 trading strategy designed around them?
+- Does the Step 4 assumption matrix fully cover all segments from Step 1?
+
+### 6.2 Red Team Self-Critique (Condensed to 3 Points)
+
+From an overall logic chain perspective, list the 3 most critical falsification paths:
+
+```markdown
+### Red Team Analysis
+
+1. **Most likely falsification path**: [A falsification chain spanning at least 2 steps]
+2. **Weakest evidence chain**: [Which assumption is most critical but most data-starved]
+3. **Confirmation bias risk**: [When a step's contrarian check concludes "no risk," that conclusion itself is a bias signal]
+```
+
+### 6.3 Reality Check
+
+- Do the conclusions contradict known market data/consensus?
+- Does the current stock price already reflect our judgment?
+- How large is the deviation from sell-side consensus? Is the basis defensible?
+
+### 6.4 Probability Calibration Check
 
 ```python
 from src.analysis.monte_carlo import load_calibration_stats
 stats = load_calibration_stats()
 ```
 
-检查项：
-1. 历史偏差方向：如果系统性偏乐观/保守，本次 P50 是否已考虑？
-2. P30-P70 命中率是否接近 40%？
+Check items:
+1. Historical bias direction: If systematically optimistic/conservative, has this P50 accounted for it?
+2. Is the P30-P70 hit rate close to 40%?
 
-如无历史校准数据，注明"无历史校准数据，可靠性待验证"。
+If no historical calibration data exists, note: "No historical calibration data available; reliability pending verification."
 
-## 最终评级
+## Final Rating
 
-**评级标准**：
-- **A（高置信）**：所有事实可追溯，逻辑完全一致，Red Team 未发现重大风险
-- **B（中等）**：少量事实无法追溯但非核心，存在可解释的小偏差
-- **C（需补充）**：核心事实有 UNVERIFIED 或 FACT ERROR，存在未解释的矛盾
+**Rating criteria**:
+- **A (High Confidence)**: All facts traceable, logic fully consistent, Red Team found no material risks
+- **B (Moderate)**: Minor facts untraceable but non-core, explainable small deviations exist
+- **C (Needs Supplement)**: Core facts have UNVERIFIED or FACT ERROR, unexplained contradictions exist
 
 ```markdown
-### 最终评级
+### Final Rating
 
-**报告整体质量**：[A/B/C]
+**Report Overall Quality**: [A/B/C]
 
-**需要特别关注的争议点**：[列表]
-**建议修正项**：[列表]
+**Disputed Points Requiring Attention**: [list]
+**Recommended Corrections**: [list]
 ```

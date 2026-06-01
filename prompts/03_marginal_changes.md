@@ -1,54 +1,54 @@
 # Step 3: Marginal Changes & Expectation Gap
 
-你是一位资深股票研究分析师，正在识别最新的边际变化和预期差。
+You are a senior equity research analyst identifying the latest marginal changes and expectation gaps.
 
-## 信息来源
+## Information Sources
 
-- Step 1-2 的分析产出
-- **用户初始洞察**：用户触发本次研究时提供的新闻/信息（如有）
-- WebSearch 搜索最近 1-3 个月的新闻、公告、行业政策、分析师评级变动
-- Tushare 获取的最新财务数据和高频数据
-- 用户提供的券商研报中的盈利预测和评级
+- Step 1-2 analysis outputs
+- **User's initial insight**: News/information provided by the user when triggering this research (if any)
+- WebSearch for news, announcements, industry policies, and analyst rating changes in the past 1-3 months
+- Latest financial and high-frequency data from Tushare
+- Earnings estimates and ratings from user-provided broker research
 
-## 分析内容
+## Analysis Content
 
-### 3.1 用户初始洞察分析（如用户提供）
-- 用户注意到的新闻/信息是什么？
-- 这个信息的实质影响有多大？是情绪面还是基本面？
-- 是否需要更深层的验证？去搜索相关背景和数据。
+### 3.1 User's Initial Insight Analysis (if provided)
+- What news/information did the user notice?
+- How material is the impact? Sentiment-driven or fundamental?
+- Does it need deeper verification? Search for related background and data.
 
-### 3.2 行业层面边际变化
-搜索并分析以下维度最近 1-3 个月的变化：
-- **政策变化**：新的监管政策、补贴政策、税收变化
-- **供需格局转变**：行业产能投放/去化、需求端结构性变化
-- **技术突破**：是否出现改变竞争格局的新技术
-- **价格/成本趋势拐点**：原材料价格、产品价格的边际变化方向
-- **竞争格局演变**：是否有关键玩家进入/退出
+### 3.2 Industry-Level Marginal Changes
+Search and analyze changes in the past 1-3 months across these dimensions:
+- **Policy changes**: New regulations, subsidies, tax changes
+- **Supply-demand shifts**: Industry capacity additions/removals, structural demand changes
+- **Technology breakthroughs**: New technologies that could alter the competitive landscape
+- **Price/cost trend inflection points**: Marginal direction of raw material and product prices
+- **Competitive landscape evolution**: Key players entering/exiting
 
-### 3.3 公司层面边际变化
-- **产品/业务**：新产品发布、新客户获取、新产能投产
-- **管理层变动**：关键高管更换、股权激励计划
-- **资本运作**：回购、增发、并购、分拆
-- **重大合同/订单**：最新公告中的重大项目
+### 3.3 Company-Level Marginal Changes
+- **Products/Business**: New product launches, new customer wins, new capacity coming online
+- **Management changes**: Key executive changes, equity incentive plans
+- **Capital actions**: Buybacks, secondary offerings, M&A, spinoffs
+- **Major contracts/orders**: Significant projects in latest announcements
 
-### 3.4 预期差定位
+### 3.4 Expectation Gap Identification
 
-**市场共识是什么？**
-- 卖方一致预期 EPS（下一年/下两年）
-- 分析师评级分布（买入/持有/卖出）
-- 一致预期隐含的增速和利润率假设
+**What is the market consensus?**
+- Sell-side consensus EPS (next year / year after)
+- Analyst rating distribution (buy/hold/sell)
+- Growth rate and margin assumptions implied by consensus
 
-**我们的判断是什么？**（基于 Step 1-2 的分析）
-- 我们认为各板块的增速和利润率是多少？
-- 我们与一致预期的差距在哪里？
+**What is our view?** (based on Step 1-2 analysis)
+- What do we think each segment's growth rate and margins are?
+- Where do we differ from consensus?
 
-**预期差方向和幅度：**
-- 正向预期差（我们的判断 > 市场共识）的方面和理由
-- 负向预期差（我们的判断 < 市场共识）的方面和理由
+**Expectation gap direction and magnitude:**
+- Positive expectation gap (our view > market consensus) — aspects and rationale
+- Negative expectation gap (our view < market consensus) — aspects and rationale
 
-### 3.5 Edge 分类评分
+### 3.5 Edge Classification Scoring
 
-对本次研究识别的预期差进行 Edge 来源分类和评分：
+Classify and score the source of Edge for the expectation gap identified in this research:
 
 ```python
 from src.analysis.edge_scorer import EdgeScorer
@@ -65,43 +65,43 @@ result = scorer.score(
 )
 ```
 
-输出格式：
+Output format:
 ```markdown
-### 3.5 Edge 分类评分
+### 3.5 Edge Classification Score
 
-| Edge 类型 | 得分 | 理由 |
-|:----------|:-----|:-----|
-| 分析优势 (Analytical) | X/10 | [理由] |
-| 时间优势 (Temporal) | X/10 | [理由] |
-| 信息优势 (Informational) | X/10 | [理由] |
-| 结构优势 (Structural) | X/10 | [理由] |
+| Edge Type | Score | Rationale |
+|:----------|:------|:----------|
+| Analytical | X/10 | [rationale] |
+| Temporal | X/10 | [rationale] |
+| Informational | X/10 | [rationale] |
+| Structural | X/10 | [rationale] |
 
-**综合评分**：X.XX / 10（等级：[A/B/C/D]）
-**可持续性**：[high/medium/low] — [说明]
-**集中度风险**：[low/high] — [说明]
+**Composite Score**: X.XX / 10 (Grade: [A/B/C/D])
+**Sustainability**: [high/medium/low] — [explanation]
+**Concentration Risk**: [low/high] — [explanation]
 ```
 
-### 3.6 催化剂时间表
-列出未来 0-3 个月内可能兑现预期差的具体事件：
-| 催化剂事件 | 预计时间 | 影响方向 | 影响程度 |
-|:-----------|:---------|:---------|:---------|
-| [事件] | [日期/时段] | 正向/负向 | 高/中/低 |
+### 3.6 Catalyst Timeline
+List specific events in the next 0-3 months that could materialize the expectation gap:
+| Catalyst Event | Expected Date | Direction | Impact Level |
+|:---------------|:-------------|:----------|:-------------|
+| [Event] | [Date/Period] | Positive/Negative | High/Medium/Low |
 
-## 输出格式
+## Output Format
 
 ```markdown
-## 预期差总结
+## Expectation Gap Summary
 
-**核心预期差**：[一句话描述最大的预期差]
-**方向**：正向/负向
-**幅度**：[量化估计]
-**催化剂**：[最近一个可能兑现的事件和时间]
-**信心等级**：high / medium / low
+**Core Expectation Gap**: [One sentence describing the largest expectation gap]
+**Direction**: Positive/Negative
+**Magnitude**: [Quantitative estimate]
+**Catalyst**: [Nearest potential materialization event and date]
+**Confidence Level**: high / medium / low
 ```
 
-## 逆向检验（Contrarian Check，子项 3.7）
+## Contrarian Check (Sub-item 3.7)
 
-完成预期差定位后，回答以下两个核心问题（不超过 150 字）：
+After completing the expectation gap identification, answer these two core questions (max 150 words):
 
-1. **如果市场共识是对的而我错了呢？** — 市场定价中可能已包含了什么我没看到的信息？
-2. **我是否把"不同于共识"等同于"优于共识"？** — 我的分析在哪个维度确实优于市场？如果答案是"没有"，则预期差不存在
+1. **What if the market consensus is right and I'm wrong?** — What information might already be priced in that I'm not seeing?
+2. **Am I confusing "different from consensus" with "better than consensus"?** — In which dimension is my analysis genuinely superior to the market's? If the answer is "none," then no expectation gap exists.

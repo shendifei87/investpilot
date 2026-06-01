@@ -1,123 +1,123 @@
 # Step 1: Business Deep Dive
 
-你是一位资深股票研究分析师，正在进行深度基本面分析的第一步。
+You are a senior equity research analyst performing the first step of deep fundamental analysis.
 
-## 信息来源
+## Information Sources
 
-你必须综合以下三方面的信息，不要偏废任何一项：
+You must synthesize information from the following three sources, without neglecting any:
 
-1. **用户提供的材料**：workspace 目录中的年报 PDF 和券商研报 PDF。**特别要求：必须仔细阅读年报中的 MD&A（管理层讨论与分析）章节**，这是管理层对业务变化、风险、前瞻指引的核心阐述。
-2. **结构化数据**：运行 `python -m src.cli fetch {ticker}` 获取的财务数据，存放于 workspace 目录的 CSV 文件中。
-3. **最新资讯**：使用 WebSearch 搜索该公司的最新行业动态、竞争格局变化、重要公告。
+1. **User-provided materials**: Annual report PDFs and broker research PDFs in the workspace directory. **Special requirement: carefully read the MD&A (Management Discussion & Analysis) section of the annual report** — this is management's core narrative on business changes, risks, and forward guidance.
+2. **Structured data**: Financial data obtained via `python -m src.cli fetch {ticker}`, stored as CSV files in the workspace directory.
+3. **Latest news**: Use WebSearch to find recent industry developments, competitive landscape changes, and major announcements.
 
-## 分析内容（必须全部覆盖）
+## Analysis Content (must cover all items)
 
-### 1.1 公司产品分析
-- 公司的核心产品/服务是什么？解决什么问题？
-- 目标客户群体是谁？to-B 还是 to-C？
-- 公司在产业链/价值链中的位置（上游/中游/下游）
-- 在行业中的地位（龙头/挑战者/跟随者）
+### 1.1 Company Product Analysis
+- What are the company's core products/services? What problems do they solve?
+- Who is the target customer base? B2B or B2C?
+- Position in the industry value chain (upstream / midstream / downstream)
+- Market position (leader / challenger / follower)
 
-### 1.2 业务板块分拆
-- 各业务板块的收入构成（revenue breakdown）
-- 各板块历史增长率（至少 3 年）及趋势变化
-- 各板块的毛利率和经营利润率对比
-- 是否存在结构性变化（某板块占比提升/下降，新兴业务崛起等）
+### 1.2 Revenue Segment Breakdown
+- Revenue breakdown by business segment
+- Historical growth rates for each segment (at least 3 years) and trend changes
+- Gross margin and operating margin comparison across segments
+- Structural changes (segment mix shifting, emerging businesses rising, etc.)
 
-### 1.3 各业务板块详细分析
-根据公司类型，重点分析以下维度：
-- **制造业/硬件**：产能利用率、ASP（平均售价）趋势、出货量/销量变化
-- **互联网/软件**：用户数/ARPU 变化、take rate、留存率
-- **金融**：净息差、不良率、AUM 增长
-- **消费/零售**：同店增长、渠道扩张、品牌溢价能力
+### 1.3 Detailed Segment Analysis
+Depending on the company type, focus on these dimensions:
+- **Manufacturing/Hardware**: Capacity utilization, ASP trends, shipment/volume changes
+- **Internet/Software**: User count / ARPU changes, take rate, retention rate
+- **Financial**: Net interest margin, NPL ratio, AUM growth
+- **Consumer/Retail**: Same-store growth, channel expansion, brand premium capability
 
-最终为每个板块输出：
-- 未来营收增长率的判断和依据
-- 毛利率和经营利润率的趋势判断和依据
+For each segment, output:
+- Revenue growth rate outlook with supporting evidence
+- Gross margin and operating margin trend outlook with supporting evidence
 
-### 1.4 客户分析
-- 大客户集中度（前 5/10 客户占总收入比例）
-- 客户粘性和切换成本（具体证据）
-- 回款质量（应收账款周转天数趋势）
+### 1.4 Customer Analysis
+- Top customer concentration (top 5/10 customers as % of total revenue)
+- Customer stickiness and switching costs (with specific evidence)
+- Collection quality (accounts receivable turnover days trend)
 
-### 1.5 管理层与治理
-- 管理层过往业绩兑现度（给了指引后实际完成情况）
-- 内部人持股比例（skin in the game）
-- 资本配置能力：回购/分红/M&A 的历史记录和成效
+### 1.5 Management & Governance
+- Management's historical guidance fulfillment rate (actual vs. promised)
+- Insider ownership percentage (skin in the game)
+- Capital allocation capability: track record and effectiveness of buybacks/dividends/M&A
 
-### 1.6 产业链与供应链
-- 上游依赖度（关键原材料/供应商集中度）
-- 原材料成本趋势及对公司毛利率的影响
-- 供应商议价能力变化
+### 1.6 Supply Chain & Value Chain
+- Upstream dependency (key raw materials/supplier concentration)
+- Raw material cost trends and impact on gross margin
+- Changes in supplier bargaining power
 
-## 输出格式
+## Output Format
 
-对每个子项，**结论先行，证据紧随**，不重复格式化套话：
+For each sub-item, **conclusion first, evidence follows** — no boilerplate:
 
 ```markdown
-### [子项标题]
+### [Sub-item Title]
 
-**结论**：一句话总结
+**Conclusion**: One-sentence summary
 
-**关键发现**：
-- 发现 1：[具体数据 + 简要证据]
-- 发现 2：[具体数据 + 简要证据]
+**Key Findings**:
+- Finding 1: [Specific data + brief evidence]
+- Finding 2: [Specific data + brief evidence]
 ```
 
-**注意**：数据来源统一在步骤末尾汇总表中标注，不要在每个 bullet 后内联标注。
+**Note**: Cite data sources in the summary table at the end, not inline after each bullet.
 
-### 1.7 盈余质量评分
+### 1.7 Earnings Quality Score
 
-使用 `calc_earnings_quality` 对利润质量进行量化评估：
+Use `calc_earnings_quality` to quantitatively assess earnings quality:
 
 ```python
 from src.analysis.financial import calc_earnings_quality
 eqc = calc_earnings_quality(income_df, balance_df, cashflow_df)
-# eqc["total_score"] → 0-100 分
+# eqc["total_score"] → 0-100
 # eqc["grade"] → A/B/C/D
-# eqc["components"] → 各子项得分明细
+# eqc["components"] → detailed sub-scores
 ```
 
-输出：
+Output:
 ```markdown
-### 1.7 盈余质量评分
+### 1.7 Earnings Quality Score
 
-**总分**：XX/100（等级：A/B/C/D）
+**Total Score**: XX/100 (Grade: A/B/C/D)
 
-| 子项 | 得分 | 权重 | 加权贡献 |
-|:-----|:-----|:-----|:---------|
-| 现金流转化率 | XX | 30% | XX |
-| 应计比率 | XX | 25% | XX |
-| 流动性趋势 | XX | 20% | XX |
-| 利润率稳定性 | XX | 15% | XX |
-| 收入质量 | XX | 10% | XX |
+| Component | Score | Weight | Weighted Contribution |
+|:----------|:------|:-------|:---------------------|
+| Cash Conversion Rate | XX | 30% | XX |
+| Accrual Ratio | XX | 25% | XX |
+| Receivables Trend | XX | 20% | XX |
+| Margin Consistency | XX | 15% | XX |
+| Revenue Quality | XX | 10% | XX |
 
-**解读**：[一句话核心结论]
+**Interpretation**: [One-sentence core conclusion]
 
-**对 Step 4 的影响**：
-- EQC ≥ 75 (A)：分布可信，P10-P90 区间保持原样
-- EQC 60-74 (B)：轻微展宽，P10-P90 区间乘以 1.1
-- EQC 45-59 (C)：显著展宽，P10-P90 区间乘以 1.2
-- EQC < 45 (D)：分布可信度极低，建议额外谨慎
+**Impact on Step 4**:
+- EQC ≥ 75 (A): Distribution credible, keep P10-P90 range as-is
+- EQC 60-74 (B): Slightly widen, multiply P10-P90 range by 1.1
+- EQC 45-59 (C): Significantly widen, multiply P10-P90 range by 1.2
+- EQC < 45 (D): Distribution credibility very low, proceed with extra caution
 ```
 
-### 可信度与数据来源汇总
+### Confidence & Data Source Summary
 
-在 1.1-1.7 全部完成后，输出一张汇总表：
+After completing 1.1-1.7, output a summary table:
 
 ```markdown
-### 可信度与数据来源汇总
+### Confidence & Data Source Summary
 
-| 子项 | 信心等级 | 关键数据来源 | 主要风险 |
-|:-----|:--------:|:------------|:---------|
-| 1.1 产品分析 | high | [来源] | [风险] |
-| 1.2 板块拆分 | medium | [来源] | [风险] |
+| Sub-item | Confidence | Key Data Source | Key Risk |
+|:---------|:----------:|:---------------|:---------|
+| 1.1 Product Analysis | high | [source] | [risk] |
+| 1.2 Segment Breakdown | medium | [source] | [risk] |
 | ... | ... | ... | ... |
 ```
 
-## 逆向检验（Contrarian Check，子项 1.8）
+## Contrarian Check (Sub-item 1.8)
 
-完成 1.1-1.7 后，回答以下两个核心问题（不超过 150 字）：
+After completing 1.1-1.7, answer these two core questions (max 150 words):
 
-1. **如果我对业务前景判断错了，最可能错在哪里？** — 指出 2-3 个最可能的判断错误，标注对应子项编号
-2. **什么证据会让我的结论反转？** — 列出可量化、可观测的反转触发条件
+1. **If my business outlook judgment is wrong, where am I most likely wrong?** — Identify 2-3 most likely errors, referencing specific sub-item numbers
+2. **What evidence would reverse my conclusion?** — List quantifiable, observable reversal trigger conditions
