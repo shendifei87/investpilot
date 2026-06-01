@@ -276,12 +276,39 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
 
     # From step4: current price, forward PE, target price
     s4 = _read_file('step4_quantitative_model.md')
-    m = re.search(r'当前股价[：:]\s*[~～]?([\d.]+)', s4)
-    if m:
-        metrics['current_price'] = m.group(1)
-    m = re.search(r'Forward PE[^(]*?([\d.]+)x', s4)
-    if m:
-        metrics['forward_pe'] = m.group(1) + 'x'
+
+    # Current price: prefer calculated_valuation.json, then regex
+    cv_file = ws / 'calculated_valuation.json'
+    cv = {}
+    if cv_file.exists():
+        try:
+            cv = json.loads(cv_file.read_text(encoding='utf-8'))
+            if 'price_hkd' in cv:
+                metrics['current_price'] = str(cv['price_hkd'])
+        except Exception:
+            pass
+    if 'current_price' not in metrics:
+        m = re.search(r'当前价[格：:]*\s*[~～]?HKD\s*([\d.]+)', s4)
+        if not m:
+            m = re.search(r'当前股价[：:]\s*[~～]?([\d.]+)', s4)
+        if not m:
+            m = re.search(r'当前价格[：:]\s*[~～]?([\d.]+)', s4)
+        if m:
+            metrics['current_price'] = m.group(1)
+    # Forward PE: prefer calculated_valuation.json (most reliable), then regex fallback
+    if cv:
+        # Prefer T+2 forward PE, then T+1, then TTM
+        for key in ('pe_forward_t2_ngaap', 'pe_forward_t1_ngaap', 'pe_forward_t2',
+                    'pe_forward_t1', 'pe_ttm_ngaap', 'pe_ttm'):
+            if key in cv and cv[key]:
+                metrics['forward_pe'] = str(cv[key]) + 'x'
+                break
+    if 'forward_pe' not in metrics:
+        m = re.search(r'PE\(Forward[^)]*\)[^(]*?([\d.]+)x', s4)
+        if not m:
+            m = re.search(r'Forward PE[^(]*?([\d.]+)x', s4)
+        if m:
+            metrics['forward_pe'] = m.group(1) + 'x'
     # P50 target price — prefer T+2 if present (重大变化期), else T+1
     # Strategy: find T+2 results section, extract P50 from it; fallback to last bold P50
     t2_section = re.search(
@@ -310,14 +337,19 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
         if m:
             metrics['target_price'] = m.group(1)
 
-    # From step5: RRR — prefer T+2 row if present
+    # From step5: RRR — extract the actual RRR numeric value
     s5 = _read_file('step5_rrr_strategy.md')
-    # Look for T+2 RRR first
-    m = re.search(r'T\+2.*?RRR.*?([\d.]+)', s5, re.DOTALL)
+    # Priority 1: explicit "**RRR** | **X.XX**" or "RRR (T+2) | X.XX" in table rows
+    m = re.search(r'\*\*RRR[^*]*\*\*\s*\|?\s*\*{0,2}([\d.]+)\*{0,2}', s5)
     if not m:
-        m = re.search(r'主估算.*?RRR.*?([\d.]+)', s5, re.DOTALL)
+        # Priority 2: "RRR = X.XX" or "RRR：X.XX"
+        m = re.search(r'RRR\s*[=：:]\s*\*{0,2}([\d.]+)\*{0,2}', s5)
     if not m:
-        m = re.search(r'RRR\s*[=：:]\s*([\d.]+)', s5)
+        # Priority 3: "RRR (T+2)" followed by number on same line (not table)
+        m = re.search(r'RRR\s*\([^)]*\)\s*[=：:]?\s*([\d.]+)', s5)
+    if not m:
+        # Priority 4: any "RRR" followed by number in close proximity (max 30 chars)
+        m = re.search(r'RRR.{0,30}?([\d]+\.[\d]+)', s5)
     if m:
         metrics['rrr'] = m.group(1)
 
