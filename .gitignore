@@ -9,3 +9,5 @@ workspaces/
 .env
 *.env
 .venv/
+.DS_Store
+.claude/
