@@ -1,124 +1,124 @@
 # InvestPilot
 
-基于 Claude Code 的深度基本面投研框架。寻找估值被显著低估的股票（高赔率 + 高胜率），核心是识别预期差并在 0-3 个月内兑现。
+A deep fundamental investment research harness built on Claude Code. Seeks significantly undervalued stocks (high reward-to-risk + high probability), with the core thesis of identifying expectation gaps that materialize within 0–3 months.
 
-## 特性
+## Features
 
-- **七步深度投研流程** — 业务分析 → 护城河 → 边际变化 → 量化建模 → 交易策略 → 审计 → 研究总监审核
-- **蒙特卡洛模拟** — t-Copula 依赖结构 + Kelly 仓位管理
-- **多市场支持** — A 股、港股、美股（数据源：Tushare Pro）
-- **预期差驱动** — Edge 分类评分 + 催化剂时间衰减追踪
-- **知识图谱** — 跨股票研究经验积累与模式匹配
-- **自包含 HTML 报告** — 内联 CSS + base64 图表嵌入
+- **7-Step Deep Research Pipeline** — Business Analysis → Competitive Moat → Marginal Changes → Quantitative Modeling → Trading Strategy → Auditing → Research Director Review
+- **Monte Carlo Simulation** — t-Copula dependency structure + Kelly criterion position sizing
+- **Multi-Market Support** — A-share, Hong Kong, US stocks (data source: Tushare Pro)
+- **Expectation Gap Driven** — 4-dimension Edge classification scoring + catalyst time-decay tracking
+- **Knowledge Graph** — Cross-stock research experience accumulation and pattern matching
+- **Self-Contained HTML Reports** — Inline CSS + base64-embedded charts
 
-## 安装
+## Installation
 
 ```bash
-# 需要 Python 3.9+
+# Requires Python 3.9+
 pip install -e ".[dev]"
 ```
 
-或手动安装依赖：
+Or install dependencies manually:
 
 ```bash
 pip install tushare pandas numpy scipy matplotlib requests tabulate pytest
 ```
 
-## 配置
+## Configuration
 
-设置 Tushare Pro API Token：
+Set your Tushare Pro API token:
 
 ```bash
 export TUSHARE_TOKEN="your_token_here"
 ```
 
-在 [tushare.pro](https://tushare.pro) 注册获取 Token。
+Register at [tushare.pro](https://tushare.pro) to get a token.
 
-## 快速开始
+## Quick Start
 
-### 1. 创建 Workspace
+### 1. Create a Workspace
 
 ```bash
 mkdir -p workspaces/AAPL
-# 将年报 PDF 和券商研报放入该目录
+# Place annual report PDFs and broker research into this directory
 ```
 
-### 2. 数据抓取
+### 2. Fetch Data
 
 ```bash
-# 检测市场
+# Detect market
 python -m src.cli detect AAPL
 # → {"market": "US", "normalized": "AAPL"}
 
-# 抓取数据到 workspace
+# Fetch data into workspace
 python -m src.cli fetch AAPL -o workspaces/AAPL
 ```
 
-### 3. 启动投研
+### 3. Launch Research
 
-在 Claude Code 中输入股票代码即可触发七步分析流程：
+Enter a stock ticker in Claude Code to trigger the 7-step analysis pipeline:
 
 ```
-> 研究 AAPL
+> Research AAPL
 ```
 
-详细流程参见 [CLAUDE.md](CLAUDE.md)。
+See [CLAUDE.md](CLAUDE.md) for the full workflow details.
 
-## CLI 命令
+## CLI Commands
 
-| 命令 | 说明 |
-|:-----|:-----|
-| `detect <ticker>` | 检测股票市场（A股/港股/美股） |
-| `fetch <ticker>` | 抓取数据到 workspace |
-| `fetch-peers <ticker>` | 抓取同业数据 |
-| `analyze <ticker>` | 技术指标分析（MA/RSI/MACD） |
-| `thesis <action>` | 管理 investment thesis |
-| `catalyst <action>` | 催化剂追踪 |
-| `knowledge <action>` | 知识图谱操作 |
-| `report <workspace>` | 生成 HTML 研报 |
+| Command | Description |
+|:--------|:------------|
+| `detect <ticker>` | Detect stock market (A-share / HK / US) |
+| `fetch <ticker>` | Fetch data into workspace |
+| `fetch-peers <ticker>` | Fetch peer company data |
+| `analyze <ticker>` | Technical analysis (MA / RSI / MACD) |
+| `thesis <action>` | Manage investment thesis lifecycle |
+| `catalyst <action>` | Track catalysts with time decay |
+| `knowledge <action>` | Knowledge graph operations |
+| `report <workspace>` | Generate HTML research report |
 
-## 项目结构
+## Project Structure
 
 ```
 investpilot/
-├── CLAUDE.md              # 投研框架主 prompt（七步流程定义）
-├── config/                # 配置（市场规则、阈值、权重）
-├── prompts/               # 七步 prompt 模板
+├── CLAUDE.md              # Master prompt (7-step workflow definition)
+├── config/                # Configuration (market rules, thresholds, weights)
+├── prompts/               # 7-step prompt templates
 ├── src/
-│   ├── cli.py             # CLI 入口
-│   ├── storage.py         # 原子化 JSON 存储
-│   ├── analysis/          # 分析引擎
-│   │   ├── financial.py   # 财务分析（PE/PB/PS/EV, 盈余质量评分）
-│   │   ├── monte_carlo.py # 蒙特卡洛模拟 + Kelly
-│   │   ├── valuation.py   # DCF / Reverse DCF / PE Band
-│   │   ├── step4_validate.py  # Step 4 预检（15 项验证）
-│   │   ├── thesis_tracker.py  # Thesis 生命周期管理
-│   │   ├── catalyst_tracker.py # 催化剂追踪 + 时间衰减
-│   │   ├── edge_scorer.py     # Edge 四维评分
-│   │   └── knowledge_graph.py # 跨股票知识图谱
-│   ├── data/              # 数据抓取层
-│   │   ├── ashare_fetcher.py  # A 股（Tushare）
-│   │   ├── hk_fetcher.py      # 港股（Tushare）
-│   │   ├── us_fetcher.py      # 美股（Tushare）
-│   │   └── tushare_client.py  # Tushare API 统一客户端
-│   └── report/            # 报告生成（HTML + Markdown）
-├── tests/                 # 测试套件（172 项测试）
-└── workspaces/            # 按股票代码组织的研究数据
+│   ├── cli.py             # CLI entry point
+│   ├── storage.py         # Atomic JSON storage (crash-safe)
+│   ├── analysis/          # Analysis engine
+│   │   ├── financial.py   # Financial analysis (PE/PB/PS/EV, earnings quality)
+│   │   ├── monte_carlo.py # Monte Carlo simulation + Kelly criterion
+│   │   ├── valuation.py   # DCF / Reverse DCF / Forward PE Band
+│   │   ├── step4_validate.py  # Step 4 pre-flight validator (15 checks)
+│   │   ├── thesis_tracker.py  # Thesis lifecycle management
+│   │   ├── catalyst_tracker.py # Catalyst tracking + time decay
+│   │   ├── edge_scorer.py     # 4-dimension Edge scoring
+│   │   └── knowledge_graph.py # Cross-stock knowledge graph
+│   ├── data/              # Data fetching layer
+│   │   ├── ashare_fetcher.py  # A-share (Tushare)
+│   │   ├── hk_fetcher.py      # Hong Kong (Tushare)
+│   │   ├── us_fetcher.py      # US (Tushare)
+│   │   └── tushare_client.py  # Unified Tushare API client
+│   └── report/            # Report generation (HTML + Markdown)
+├── tests/                 # Test suite (172 tests)
+└── workspaces/            # Per-stock research data and outputs
 ```
 
-## 运行测试
+## Running Tests
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-## 市场规则
+## Market Rules
 
-| 市场 | 报告语言 | Ticker 格式 | 示例 |
-|:-----|:---------|:-----------|:-----|
-| A 股 | 中文 | `600xxx.SS` / `000xxx.SZ` | `600519`, `000001.SZ` |
-| 港股 | 中文 | `xxxx.HK` | `0700.HK`, `9988.HK` |
-| 美股 | 英文 | `XXXX` | `AAPL`, `TSLA` |
+| Market | Report Language | Ticker Format | Examples |
+|:-------|:----------------|:--------------|:---------|
+| A-share | Chinese | `600xxx.SS` / `000xxx.SZ` | `600519`, `000001.SZ` |
+| Hong Kong | Chinese | `xxxx.HK` | `0700.HK`, `9988.HK` |
+| US | English | `XXXX` | `AAPL`, `TSLA` |
 
 ## License
 
