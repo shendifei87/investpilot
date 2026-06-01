@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InvestPilot</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; }
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Header */
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 20px; font-weight: 600; color: #f0f6fc; }
+.header h1 span { color: #3fb950; }
+.header .subtitle { color: #8b949e; font-size: 13px; margin-left: 12px; }
+
+/* Container */
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+/* New Research */
+.new-research { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+.new-research h2 { font-size: 16px; margin-bottom: 12px; color: #f0f6fc; }
+.input-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.input-row input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 14px; width: 180px; }
+.input-row input[type="text"]:focus { outline: none; border-color: #58a6ff; }
+.input-row textarea { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 13px; flex: 1; min-width: 300px; min-height: 38px; max-height: 80px; resize: vertical; font-family: inherit; }
+.input-row textarea:focus { outline: none; border-color: #58a6ff; }
+.btn { background: #238636; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: #2ea043; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: #30363d; }
+.btn-secondary:hover { background: #484f58; }
+.msg { margin-top: 8px; font-size: 13px; padding: 6px 10px; border-radius: 4px; }
+.msg.success { background: #0d2818; color: #3fb950; }
+.msg.error { background: #2d1117; color: #f85149; }
+
+/* Workspace List */
+.workspace-list h2 { font-size: 16px; margin-bottom: 12px; color: #f0f6fc; }
+.ws-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.ws-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s; }
+.ws-card:hover { border-color: #58a6ff; }
+.ws-card .ticker { font-size: 18px; font-weight: 700; color: #f0f6fc; }
+.ws-card .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; vertical-align: middle; }
+.ws-card .status-badge.ready { background: #1f3a1f; color: #3fb950; }
+.ws-card .status-badge.in_progress { background: #1f2d3d; color: #58a6ff; }
+.ws-card .status-badge.completed { background: #1f3a1f; color: #3fb950; }
+.ws-card .status-badge.empty { background: #2d1117; color: #8b949e; }
+.ws-card .progress-bar { height: 4px; background: #21262d; border-radius: 2px; margin-top: 10px; }
+.ws-card .progress-fill { height: 100%; background: #3fb950; border-radius: 2px; transition: width 0.3s; }
+.ws-card .step-summary { font-size: 12px; color: #8b949e; margin-top: 6px; }
+.empty-state { color: #8b949e; font-size: 14px; padding: 32px; text-align: center; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+
+/* Detail View */
+.detail { display: none; }
+.detail.active { display: block; }
+.list-view.hidden { display: none; }
+.back-btn { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; font-size: 13px; margin-bottom: 16px; cursor: pointer; }
+.back-btn:hover { color: #c9d1d9; }
+.detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.detail-header .ticker { font-size: 28px; font-weight: 700; color: #f0f6fc; }
+
+/* Steps */
+.steps { display: flex; flex-direction: column; gap: 8px; }
+.step { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+.step.completed { border-left: 3px solid #3fb950; }
+.step.in-progress { border-left: 3px solid #58a6ff; }
+.step-header { display: flex; align-items: center; padding: 14px 16px; cursor: pointer; gap: 10px; }
+.step-header:hover { background: #1c2128; }
+.step-num { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; background: #21262d; color: #8b949e; flex-shrink: 0; }
+.step.completed .step-num { background: #238636; color: #fff; }
+.step-title { font-size: 14px; color: #c9d1d9; flex: 1; }
+.step-status { font-size: 12px; color: #8b949e; }
+.step-body { display: none; padding: 0 16px 16px 50px; }
+.step.open .step-body { display: block; }
+.step-content { font-size: 13px; line-height: 1.7; color: #c9d1d9; max-height: 600px; overflow-y: auto; }
+.step-content h1, .step-content h2, .step-content h3 { color: #f0f6fc; margin: 12px 0 6px; }
+.step-content table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+.step-content th, .step-content td { border: 1px solid #30363d; padding: 6px 10px; font-size: 12px; }
+.step-content th { background: #21262d; }
+.step-content code { background: #1c2128; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+.step-content pre { background: #1c2128; padding: 10px; border-radius: 6px; overflow-x: auto; }
+.step-content img { max-width: 100%; border-radius: 6px; margin: 8px 0; }
+.step-content blockquote { border-left: 3px solid #3fb950; padding-left: 12px; color: #8b949e; }
+.step-loading { color: #8b949e; font-style: italic; }
+
+/* Refresh */
+.refresh-btn { float: right; }
+
+/* Report Link */
+.report-btn { background: #1f6feb; color: #fff; border: none; padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.report-btn:hover { background: #388bfd; text-decoration: none; }
+
+/* Upload Zone */
+.upload-zone { background: #161b22; border: 2px dashed #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; text-align: center; transition: border-color 0.2s, background 0.2s; cursor: pointer; position: relative; }
+.upload-zone:hover, .upload-zone.dragover { border-color: #58a6ff; background: #1c2128; }
+.upload-zone .upload-label { color: #8b949e; font-size: 13px; }
+.upload-zone .upload-label span { color: #58a6ff; text-decoration: underline; }
+.upload-zone input[type="file"] { display: none; }
+.upload-status { margin-top: 10px; font-size: 12px; text-align: left; }
+.upload-status .upload-item { padding: 4px 0; color: #8b949e; }
+.upload-status .upload-item.ok { color: #3fb950; }
+.upload-status .upload-item.err { color: #f85149; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Invest<span>Pilot</span></h1>
+    <span class="subtitle">Deep Fundamental Research</span>
+  </div>
+</div>
+
+<div class="container">
+  <!-- New Research -->
+  <div class="new-research">
+    <h2>New Research</h2>
+    <div class="input-row">
+      <input type="text" id="tickerInput" placeholder="Ticker (e.g. AAPL, 0700.HK, 600519)" />
+      <textarea id="notesInput" placeholder="Optional: news URL or notes that triggered this research..."></textarea>
+      <button class="btn" id="createBtn" onclick="createWorkspace()">Create Workspace</button>
+    </div>
+    <div id="createMsg"></div>
+  </div>
+
+  <!-- List View -->
+  <div class="list-view" id="listView">
+    <div class="workspace-list">
+      <h2>Workspaces</h2>
+      <div class="ws-cards" id="wsCards"></div>
+    </div>
+  </div>
+
+  <!-- Detail View -->
+  <div class="detail" id="detailView">
+    <div class="back-btn" onclick="showList()">&#8592; Back to list</div>
+    <div class="detail-header">
+      <span class="ticker" id="detailTicker"></span>
+      <span class="status-badge" id="detailStatus"></span>
+      <span id="reportLink"></span>
+      <button class="btn-secondary btn refresh-btn" onclick="loadDetail(currentTicker)">Refresh</button>
+    </div>
+    <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+      <input type="file" id="fileInput" multiple accept=".pdf,.csv,.json,.md" onchange="handleFileSelect(event)" />
+      <div class="upload-label">Drop files here or <span>browse</span> to upload (PDF, CSV, JSON, MD)</div>
+      <div class="upload-status" id="uploadStatus"></div>
+    </div>
+    <div class="steps" id="detailSteps"></div>
+  </div>
+</div>
+
+<script>
+const POLL_INTERVAL_MS = 10000;  // configurable polling interval in milliseconds
+let currentTicker = null;
+let pollTimer = null;
+
+// Upload drag & drop setup (bound once)
+document.addEventListener('DOMContentLoaded', () => {
+  const zone = document.getElementById('uploadZone');
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    if (currentTicker && e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+  });
+});
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    ...opts,
+  });
+  return res.json();
+}
+
+async function createWorkspace() {
+  const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
+  const notes = document.getElementById('notesInput').value.trim();
+  const msg = document.getElementById('createMsg');
+  if (!ticker) { msg.innerHTML = '<div class="msg error">Please enter a ticker</div>'; return; }
+
+  const btn = document.getElementById('createBtn');
+  btn.disabled = true;
+  const data = await api('/api/research', { method: 'POST', body: JSON.stringify({ ticker, notes }) });
+  btn.disabled = false;
+
+  if (data.error) {
+    msg.innerHTML = `<div class="msg error">${data.error}</div>`;
+  } else {
+    msg.innerHTML = `<div class="msg success">${data.message}</div>`;
+    document.getElementById('tickerInput').value = '';
+    document.getElementById('notesInput').value = '';
+    loadList();
+  }
+  setTimeout(() => { msg.innerHTML = ''; }, 5000);
+}
+
+async function loadList() {
+  const data = await api('/api/workspaces');
+  const container = document.getElementById('wsCards');
+  if (!data.length) {
+    container.innerHTML = '<div class="empty-state">No workspaces yet. Create one above to get started.</div>';
+    return;
+  }
+  container.innerHTML = data.map(ws => {
+    const pct = ws.total > 0 ? (ws.completed / ws.total * 100) : 0;
+    const reportBtn = (ws.reports && ws.reports.length > 0)
+      ? `<a class="report-btn" href="/api/research/${ws.ticker}/report/${ws.reports[0]}" target="_blank" onclick="event.stopPropagation()">View Report</a>`
+      : '';
+    return `<div class="ws-card" onclick="showDetail('${ws.ticker}')">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="ticker">${ws.ticker}</span>
+        <span class="status-badge ${ws.status}">${ws.status.replace('_', ' ')}</span>
+        ${ws.has_materials ? '<span style="font-size:11px;color:#8b949e;">PDFs loaded</span>' : '<span style="font-size:11px;color:#f85149;">No PDFs</span>'}
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+        <div class="progress-bar" style="flex:1;"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <span class="step-summary">${ws.completed}/${ws.total}</span>
+        ${reportBtn}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function showList() {
+  document.getElementById('listView').classList.remove('hidden');
+  document.getElementById('detailView').classList.remove('active');
+  if (pollTimer) clearInterval(pollTimer);
+  loadList();
+}
+
+async function showDetail(ticker) {
+  currentTicker = ticker;
+  document.getElementById('listView').classList.add('hidden');
+  document.getElementById('detailView').classList.add('active');
+  await loadDetail(ticker);
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => loadDetail(ticker), POLL_INTERVAL_MS);
+}
+
+async function loadDetail(ticker) {
+  const data = await api(`/api/research/${ticker}/status`);
+  if (data.error) return;
+
+  document.getElementById('detailTicker').textContent = ticker;
+  const badge = document.getElementById('detailStatus');
+  badge.className = `status-badge ${data.status}`;
+  badge.textContent = data.status.replace('_', ' ');
+
+  // Report link
+  const reportEl = document.getElementById('reportLink');
+  if (data.reports && data.reports.length > 0) {
+    let links = data.reports.map((r, i) => {
+      const date = r.match(/(\d{8})\.html/);
+      const label = date ? date[1].replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : r;
+      return `<a class="report-btn${i > 0 ? ' btn-secondary' : ''}" href="/api/research/${ticker}/report/${r}" target="_blank" style="${i > 0 ? 'background:#30363d;' : ''}margin-left:4px;">${label}</a>`;
+    }).join('');
+    reportEl.innerHTML = links;
+  } else {
+    reportEl.innerHTML = '';
+  }
+
+  const stepsEl = document.getElementById('detailSteps');
+  const prevOpen = new Set();
+  stepsEl.querySelectorAll('.step.open').forEach(el => {
+    prevOpen.add(parseInt(el.dataset.step));
+  });
+
+  stepsEl.innerHTML = '';
+  for (let n = 1; n <= 7; n++) {
+    const step = data.steps[n];
+    const done = step.status === 'completed';
+    const isOpen = prevOpen.has(n);
+
+    const stepEl = document.createElement('div');
+    stepEl.className = `step ${done ? 'completed' : ''} ${isOpen ? 'open' : ''}`;
+    stepEl.dataset.step = n;
+    stepEl.innerHTML = `
+      <div class="step-header" onclick="toggleStep(this, ${n}, ${done})">
+        <div class="step-num">${done ? '&#10003;' : n}</div>
+        <div class="step-title">${step.name}</div>
+        <div class="step-status">${done ? 'Completed' : 'Pending'}</div>
+      </div>
+      <div class="step-body">
+        <div class="step-content" id="step-content-${n}">${done ? '<div class="step-loading">Loading...</div>' : 'Not yet completed. Run the research pipeline in Claude Code.'}</div>
+      </div>
+    `;
+    stepsEl.appendChild(stepEl);
+
+    if (done && isOpen) {
+      loadStepContent(ticker, n, data.images || []);
+    }
+  }
+}
+
+function toggleStep(header, n, done) {
+  const stepEl = header.parentElement;
+  stepEl.classList.toggle('open');
+  if (stepEl.classList.contains('open') && done) {
+    loadStepContent(currentTicker, n, []);
+  }
+}
+
+async function loadStepContent(ticker, n, images) {
+  const el = document.getElementById(`step-content-${n}`);
+  if (!el) return;
+  const data = await api(`/api/research/${ticker}/step/${n}`);
+  if (data.error) {
+    el.innerHTML = data.error;
+    return;
+  }
+  el.innerHTML = renderMarkdown(data.content);
+  if (n === 4 && images.length) {
+    images.forEach(img => {
+      if (img.includes('distribution') || img.includes('target')) {
+        el.innerHTML += `<img src="/api/research/${ticker}/image/${img}" alt="${img}" />`;
+      }
+    });
+  }
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code>$1</code>')
+    .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
+    .replace(/^---$/gm, '<hr/>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br/>');
+  html = '<p>' + html + '</p>';
+  html = html.replace(/<p>\s*<(h[123]|hr|blockquote)/g, '<$1');
+  html = html.replace(/<\/(h[123]|hr|blockquote)>\s*<\/p>/g, '</$1>');
+  return html;
+}
+
+function handleFileSelect(event) {
+  if (currentTicker && event.target.files.length) {
+    uploadFiles(event.target.files);
+    event.target.value = '';
+  }
+}
+
+async function uploadFiles(fileList) {
+  const statusEl = document.getElementById('uploadStatus');
+  statusEl.innerHTML = '';
+  const form = new FormData();
+  for (const f of fileList) form.append('file', f);
+
+  try {
+    const res = await fetch(`/api/research/${currentTicker}/upload`, { method: 'POST', body: form });
+    const data = await res.json();
+    let html = '';
+    (data.uploaded || []).forEach(name => { html += `<div class="upload-item ok">+ ${name}</div>`; });
+    (data.skipped || []).forEach(s => { html += `<div class="upload-item err">x ${s.name}: ${s.reason}</div>`; });
+    statusEl.innerHTML = html || '<div class="upload-item">No changes</div>';
+    if (data.uploaded && data.uploaded.length) loadDetail(currentTicker);
+    setTimeout(() => { statusEl.innerHTML = ''; }, 8000);
+  } catch (err) {
+    statusEl.innerHTML = `<div class="upload-item err">Upload failed: ${err.message}</div>`;
+  }
+}
+
+// Init
+loadList();
+</script>
+</body>
+</html>
