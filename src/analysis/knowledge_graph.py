@@ -38,10 +38,8 @@ Usage:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from difflib import get_close_matches
-from pathlib import Path
 import uuid
 from config.settings import WORKSPACES_DIR
 from src.storage import AtomicJSON

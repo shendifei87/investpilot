@@ -70,6 +70,8 @@ def cmd_analyze(args):
     price_file = input_dir / "price_history.csv"
     if price_file.exists():
         prices = pd.read_csv(price_file, index_col=0, parse_dates=True)
+        # Normalize column names to title case for compatibility
+        prices.columns = [c.strip().title() if isinstance(c, str) else c for c in prices.columns]
         if "Close" in prices.columns:
             close = prices["Close"]
 

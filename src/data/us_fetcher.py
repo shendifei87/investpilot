@@ -6,24 +6,20 @@ All data sourced exclusively from Tushare Pro API:
   - us_income / us_balancesheet / us_cashflow: financial statements
 """
 
-import pandas as pd
 from datetime import datetime, timedelta
-from src.data.base import BaseFetcher, FetchResult
-from config.ticker_rules import get_tushare_code
+
+from src.data.base import BaseTushareFetcher, FetchResult
 
 
-class USFetcher(BaseFetcher):
+class USFetcher(BaseTushareFetcher):
     market = "US"
-
-    def _ts_code(self, ticker: str) -> str:
-        return get_tushare_code(ticker, "US")
-
-    def _today(self) -> str:
-        return datetime.now().strftime("%Y%m%d")
-
-    def _start_date(self, period: str) -> str:
-        years = {"1y": 1, "2y": 2, "3y": 3, "5y": 5, "10y": 10}.get(period, 5)
-        return (datetime.now() - timedelta(days=365 * years)).strftime("%Y%m%d")
+    api_methods = {
+        "daily": "us_daily",
+        "income": "us_income",
+        "balance_sheet": "us_balancesheet",
+        "cashflow": "us_cashflow",
+    }
+    price_warning = "No US price data returned"
 
     # ------------------------------------------------------------------
     # Company info
@@ -49,69 +45,6 @@ class USFetcher(BaseFetcher):
                 result["industry"] = row.get("industry", "")
         except Exception as e:
             warnings.append(f"us_basic failed: {e}")
-
-        return FetchResult(data=result, source="tushare", success=True, warnings=warnings)
-
-    # ------------------------------------------------------------------
-    # Price history
-    # ------------------------------------------------------------------
-
-    def fetch_price_history(self, ticker: str, period: str = "3y") -> FetchResult:
-        from src.data.tushare_client import tushare_client
-        from src.data.tushare_normalizer import normalize_price_df
-
-        ts_code = self._ts_code(ticker)
-        start_date = self._start_date(period)
-        end_date = self._today()
-
-        try:
-            raw_df = tushare_client.us_daily(
-                ts_code=ts_code, start_date=start_date, end_date=end_date,
-            )
-            df = normalize_price_df(raw_df)
-            if df is not None and not df.empty:
-                return FetchResult(data=df, source="tushare", success=True)
-        except Exception as e:
-            return FetchResult(success=False, warnings=[str(e)])
-
-        return FetchResult(success=False, warnings=["No US price data returned"])
-
-    # ------------------------------------------------------------------
-    # Financial statements
-    # ------------------------------------------------------------------
-
-    def fetch_financial_statements(self, ticker: str) -> FetchResult:
-        from src.data.tushare_client import tushare_client
-        from src.data.tushare_normalizer import (
-            normalize_income_df,
-            normalize_balance_df,
-            normalize_cashflow_df,
-        )
-
-        ts_code = self._ts_code(ticker)
-        result = {}
-        warnings = []
-
-        try:
-            raw = tushare_client.us_income(ts_code=ts_code)
-            result["income"] = normalize_income_df(raw)
-        except Exception as e:
-            result["income"] = pd.DataFrame()
-            warnings.append(f"us_income failed: {e}")
-
-        try:
-            raw = tushare_client.us_balancesheet(ts_code=ts_code)
-            result["balance_sheet"] = normalize_balance_df(raw)
-        except Exception as e:
-            result["balance_sheet"] = pd.DataFrame()
-            warnings.append(f"us_balancesheet failed: {e}")
-
-        try:
-            raw = tushare_client.us_cashflow(ts_code=ts_code)
-            result["cashflow"] = normalize_cashflow_df(raw)
-        except Exception as e:
-            result["cashflow"] = pd.DataFrame()
-            warnings.append(f"us_cashflow failed: {e}")
 
         return FetchResult(data=result, source="tushare", success=True, warnings=warnings)
 
@@ -164,7 +97,6 @@ class USFetcher(BaseFetcher):
             )
             if daily_df is not None and not daily_df.empty:
                 latest = daily_df.iloc[-1]
-                # Optional fields may or may not be present
                 if latest.get("pe"):
                     result["pe_ttm_api"] = latest.get("pe")
                 if latest.get("pb"):
@@ -179,7 +111,6 @@ class USFetcher(BaseFetcher):
         try:
             fina = tushare_client.us_fina_indicator(ts_code=ts_code)
             if fina is not None and not fina.empty:
-                # Sort by end_date descending for latest report
                 fina = fina.sort_values("end_date", ascending=False)
                 latest = fina.iloc[0]
 
@@ -196,23 +127,18 @@ class USFetcher(BaseFetcher):
             warnings.append(f"us_fina_indicator failed: {e}")
 
         # ── Estimate total_debt from balance sheet (key-value format) ──
-        # us_balancesheet returns (ind_name, ind_value) rows per period.
-        # We look for "total_liabilities" in the latest period.
         try:
             bs_df = tushare_client.us_balancesheet(ts_code=ts_code)
             if bs_df is not None and not bs_df.empty and "ind_name" in bs_df.columns:
-                # Filter for total_liabilities
                 liab_row = bs_df[bs_df["ind_name"].str.contains(
                     "总负债|total.liabil", case=False, na=False
                 )]
                 if not liab_row.empty:
-                    # Take the latest end_date
                     liab_row = liab_row.sort_values("end_date", ascending=False)
                     val = liab_row.iloc[0].get("ind_value")
                     if val:
                         result["total_debt"] = float(val)
 
-                # Also look for cash
                 cash_row = bs_df[bs_df["ind_name"].str.contains(
                     "现金|cash", case=False, na=False
                 )]
@@ -225,12 +151,12 @@ class USFetcher(BaseFetcher):
             warnings.append(f"us_balancesheet for debt/cash failed: {e}")
 
         # ── Compute enterprise value ──
-        mc = result.get("market_cap")
-        td = result.get("total_debt")
-        tc = result.get("total_cash")
-        if mc and td:
-            result["enterprise_value"] = (
-                float(mc) + float(td) - float(tc or 0)
-            )
+        ev = self._compute_ev(
+            result.get("market_cap"),
+            result.get("total_debt"),
+            result.get("total_cash"),
+        )
+        if ev is not None:
+            result["enterprise_value"] = ev
 
         return FetchResult(data=result, source="tushare", success=True, warnings=warnings)

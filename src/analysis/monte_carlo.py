@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 from scipy.stats import t as t_dist
@@ -293,9 +290,15 @@ def run_monte_carlo(
     if n_simulations is None:
         n_simulations = MONTE_CARLO_SIMULATIONS
 
-    rng = np.random.default_rng(seed)
-    # Generate and record a seed for audit (only matters when seed=None was passed)
-    actual_seed = seed if seed is not None else int(rng.integers(0, 2**63))
+    # Record seed BEFORE creating rng so it can reproduce the full run.
+    # When seed=None, generate a fresh seed from OS entropy so the rng
+    # created below starts from a known, recorded state.
+    if seed is not None:
+        actual_seed = seed
+    else:
+        actual_seed = int(np.random.default_rng().integers(0, 2**63))
+
+    rng = np.random.default_rng(actual_seed)
 
     names = list(assumption_distributions.keys())
     n_vars = len(names)

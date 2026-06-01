@@ -22,7 +22,7 @@ def _make_tracker(tmp_path):
     """Create a CatalystTracker backed by a temp workspaces dir."""
     ws_dir = tmp_path / "workspaces" / "TEST"
     ws_dir.mkdir(parents=True, exist_ok=True)
-    with patch("src.analysis.catalyst_tracker.WORKSPACES_DIR", tmp_path / "workspaces"):
+    with patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"):
         return CatalystTracker("TEST")
 
 

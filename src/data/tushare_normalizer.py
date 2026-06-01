@@ -67,6 +67,39 @@ def normalize_price_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _normalize_financial_df(
+    raw_df: pd.DataFrame,
+    date_cols: tuple = ("end_date", "ann_date"),
+    dedup: bool = True,
+) -> pd.DataFrame:
+    """Shared preamble for financial statement normalizers.
+
+    Handles: null check → copy → dedup → date parse → 报告期 alias → sort.
+    Returns an empty DataFrame if input is None/empty.
+    """
+    if raw_df is None or raw_df.empty:
+        return pd.DataFrame()
+
+    df = raw_df.copy()
+
+    # Deduplicate: keep the latest announcement per end_date
+    if dedup and "ann_date" in df.columns and "end_date" in df.columns:
+        df = df.sort_values("ann_date", ascending=False).drop_duplicates(
+            subset=["end_date"], keep="first"
+        )
+
+    for col in date_cols:
+        _parse_date_column(df, col)
+
+    if "end_date" in df.columns:
+        df["报告期"] = df["end_date"]
+
+    if "报告期" in df.columns:
+        df = df.sort_values("报告期", ascending=False).reset_index(drop=True)
+
+    return df
+
+
 def normalize_income_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     """Normalize Tushare income statement.
 
@@ -75,24 +108,9 @@ def normalize_income_df(raw_df: pd.DataFrame) -> pd.DataFrame:
                    n_income, n_income_attr_p, eps, int_exp, income_tax, ...
     Output: adds "报告期" column from "end_date", computes "毛利润" if missing.
     """
-    if raw_df is None or raw_df.empty:
-        return pd.DataFrame()
-
-    df = raw_df.copy()
-
-    # Deduplicate: keep the latest announcement (largest ann_date) per end_date
-    if "ann_date" in df.columns and "end_date" in df.columns:
-        df = df.sort_values("ann_date", ascending=False).drop_duplicates(
-            subset=["end_date"], keep="first"
-        )
-
-    # Parse dates
-    for col in ("end_date", "ann_date", "f_ann_date"):
-        _parse_date_column(df, col)
-
-    # Add 报告期 alias (the date column _get_series looks for)
-    if "end_date" in df.columns:
-        df["报告期"] = df["end_date"]
+    df = _normalize_financial_df(raw_df, date_cols=("end_date", "ann_date", "f_ann_date"))
+    if df.empty:
+        return df
 
     # Compute 毛利润 (gross profit): revenue - oper_cost
     # Note: per Tushare docs, oper_cost = 营业成本 (COGS), total_cogs = 营业总成本 (includes period expenses)
@@ -112,10 +130,6 @@ def normalize_income_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     _add_alias(df, "int_exp", "利息费用")
     _add_alias(df, "income_tax", "所得税费用")
 
-    # Sort by report period descending (most recent first)
-    if "报告期" in df.columns:
-        df = df.sort_values("报告期", ascending=False).reset_index(drop=True)
-
     return df
 
 
@@ -126,22 +140,9 @@ def normalize_balance_df(raw_df: pd.DataFrame) -> pd.DataFrame:
                    total_liab, total_cur_liab, total_hldr_eqy_exc_min_int,
                    monetary_capital, accounts_recev, st_borr, lt_borr, ...
     """
-    if raw_df is None or raw_df.empty:
-        return pd.DataFrame()
-
-    df = raw_df.copy()
-
-    # Deduplicate: keep the latest announcement per end_date
-    if "ann_date" in df.columns and "end_date" in df.columns:
-        df = df.sort_values("ann_date", ascending=False).drop_duplicates(
-            subset=["end_date"], keep="first"
-        )
-
-    for col in ("end_date", "ann_date"):
-        _parse_date_column(df, col)
-
-    if "end_date" in df.columns:
-        df["报告期"] = df["end_date"]
+    df = _normalize_financial_df(raw_df)
+    if df.empty:
+        return df
 
     # Add Chinese aliases
     _add_alias(df, "total_hldr_eqy_exc_min_int", "所有者权益合计")
@@ -154,9 +155,6 @@ def normalize_balance_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     _add_alias(df, "st_borr", "短期借款")
     _add_alias(df, "lt_borr", "长期借款")
 
-    if "报告期" in df.columns:
-        df = df.sort_values("报告期", ascending=False).reset_index(drop=True)
-
     return df
 
 
@@ -166,30 +164,14 @@ def normalize_cashflow_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     Input columns: ts_code, ann_date, end_date, n_cashflow_act,
                    c_pay_acq_const_fiolta, depr_fa_coga_dpba, ...
     """
-    if raw_df is None or raw_df.empty:
-        return pd.DataFrame()
-
-    df = raw_df.copy()
-
-    # Deduplicate: keep the latest announcement per end_date
-    if "ann_date" in df.columns and "end_date" in df.columns:
-        df = df.sort_values("ann_date", ascending=False).drop_duplicates(
-            subset=["end_date"], keep="first"
-        )
-
-    for col in ("end_date", "ann_date"):
-        _parse_date_column(df, col)
-
-    if "end_date" in df.columns:
-        df["报告期"] = df["end_date"]
+    df = _normalize_financial_df(raw_df)
+    if df.empty:
+        return df
 
     # Add Chinese aliases
     _add_alias(df, "n_cashflow_act", "经营活动产生的现金流量净额")
     _add_alias(df, "c_pay_acq_const_fiolta", "购建固定资产无形资产和其他长期资产支付的现金")
     _add_alias(df, "depr_fa_coga_dpba", "折旧与摊销")
-
-    if "报告期" in df.columns:
-        df = df.sort_values("报告期", ascending=False).reset_index(drop=True)
 
     return df
 
@@ -201,21 +183,8 @@ def normalize_fina_indicator_df(raw_df: pd.DataFrame) -> pd.DataFrame:
                    revenue_ps, capital_rese_ps, surplus_rese_ps, undistr_profit_ps,
                    extra_item_ps, adjusted_net_profit, roe, roe_waa, ...
     """
-    if raw_df is None or raw_df.empty:
-        return pd.DataFrame()
-
-    df = raw_df.copy()
-
-    for col in ("end_date", "ann_date"):
-        _parse_date_column(df, col)
-
-    if "end_date" in df.columns:
-        df["报告期"] = df["end_date"]
-
-    if "报告期" in df.columns:
-        df = df.sort_values("报告期", ascending=False).reset_index(drop=True)
-
-    return df
+    # fina_indicator has no ann_date dedup needed (no overlapping reports)
+    return _normalize_financial_df(raw_df, dedup=False)
 
 
 def _add_alias(df: pd.DataFrame, source_col: str, alias: str) -> None:

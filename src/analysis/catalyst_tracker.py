@@ -22,29 +22,17 @@ Usage:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, date, timedelta
-from pathlib import Path
 import uuid
 
-from config.settings import WORKSPACES_DIR
-from src.storage import AtomicJSON
+from src.analysis._base import WorkspaceStateBase
 
 
-class CatalystTracker:
+class CatalystTracker(WorkspaceStateBase):
     """Tracks catalyst events and applies time-decay logic."""
 
-    def __init__(self, workspace_dir: str):
-        self.workspace = WORKSPACES_DIR / workspace_dir
-        self.workspace.mkdir(parents=True, exist_ok=True)
-        self._store = AtomicJSON(self.workspace)
-        self._data = self._load()
-
-    def _load(self) -> dict:
-        return self._store.load("catalysts.json", default={"version": 1, "catalysts": [], "kill_switches": []})
-
-    def _save(self):
-        self._store.save("catalysts.json", self._data)
+    _state_file = "catalysts.json"
+    _default_state = {"version": 1, "catalysts": [], "kill_switches": []}
 
     # ── Catalyst CRUD ────────────────────────────────────
 

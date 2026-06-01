@@ -24,9 +24,7 @@ Usage:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from config.settings import WORKSPACES_DIR
@@ -58,7 +56,13 @@ EDGE_TYPES = {
 
 
 class EdgeScorer:
-    """Classify and score the source of investment edge."""
+    """Classify and score the source of investment edge.
+
+    Note: Unlike ThesisTracker/CatalystTracker, this class does NOT extend
+    WorkspaceStateBase because:
+    1. It supports stateless mode (workspace_dir="") for ad-hoc scoring
+    2. It stores a history list, not a single mutable state dict
+    """
 
     def __init__(self, workspace_dir: str = ""):
         self.workspace = WORKSPACES_DIR / workspace_dir if workspace_dir else None

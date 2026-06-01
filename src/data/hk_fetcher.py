@@ -6,24 +6,20 @@ All data sourced exclusively from Tushare Pro API:
   - hk_income / hk_balancesheet / hk_cashflow: financial statements
 """
 
-import pandas as pd
 from datetime import datetime, timedelta
-from src.data.base import BaseFetcher, FetchResult
-from config.ticker_rules import get_tushare_code
+
+from src.data.base import BaseTushareFetcher, FetchResult
 
 
-class HKFetcher(BaseFetcher):
+class HKFetcher(BaseTushareFetcher):
     market = "HK"
-
-    def _ts_code(self, ticker: str) -> str:
-        return get_tushare_code(ticker, "HK")
-
-    def _today(self) -> str:
-        return datetime.now().strftime("%Y%m%d")
-
-    def _start_date(self, period: str) -> str:
-        years = {"1y": 1, "2y": 2, "3y": 3, "5y": 5, "10y": 10}.get(period, 5)
-        return (datetime.now() - timedelta(days=365 * years)).strftime("%Y%m%d")
+    api_methods = {
+        "daily": "hk_daily",
+        "income": "hk_income",
+        "balance_sheet": "hk_balancesheet",
+        "cashflow": "hk_cashflow",
+    }
+    price_warning = "No HK price data returned"
 
     # ------------------------------------------------------------------
     # Company info
@@ -48,69 +44,6 @@ class HKFetcher(BaseFetcher):
                 result["industry"] = row.get("industry", "")
         except Exception as e:
             warnings.append(f"hk_basic failed: {e}")
-
-        return FetchResult(data=result, source="tushare", success=True, warnings=warnings)
-
-    # ------------------------------------------------------------------
-    # Price history
-    # ------------------------------------------------------------------
-
-    def fetch_price_history(self, ticker: str, period: str = "3y") -> FetchResult:
-        from src.data.tushare_client import tushare_client
-        from src.data.tushare_normalizer import normalize_price_df
-
-        ts_code = self._ts_code(ticker)
-        start_date = self._start_date(period)
-        end_date = self._today()
-
-        try:
-            raw_df = tushare_client.hk_daily(
-                ts_code=ts_code, start_date=start_date, end_date=end_date,
-            )
-            df = normalize_price_df(raw_df)
-            if df is not None and not df.empty:
-                return FetchResult(data=df, source="tushare", success=True)
-        except Exception as e:
-            return FetchResult(success=False, warnings=[str(e)])
-
-        return FetchResult(success=False, warnings=["No HK price data returned"])
-
-    # ------------------------------------------------------------------
-    # Financial statements
-    # ------------------------------------------------------------------
-
-    def fetch_financial_statements(self, ticker: str) -> FetchResult:
-        from src.data.tushare_client import tushare_client
-        from src.data.tushare_normalizer import (
-            normalize_income_df,
-            normalize_balance_df,
-            normalize_cashflow_df,
-        )
-
-        ts_code = self._ts_code(ticker)
-        result = {}
-        warnings = []
-
-        try:
-            raw = tushare_client.hk_income(ts_code=ts_code)
-            result["income"] = normalize_income_df(raw)
-        except Exception as e:
-            result["income"] = pd.DataFrame()
-            warnings.append(f"hk_income failed: {e}")
-
-        try:
-            raw = tushare_client.hk_balancesheet(ts_code=ts_code)
-            result["balance_sheet"] = normalize_balance_df(raw)
-        except Exception as e:
-            result["balance_sheet"] = pd.DataFrame()
-            warnings.append(f"hk_balancesheet failed: {e}")
-
-        try:
-            raw = tushare_client.hk_cashflow(ts_code=ts_code)
-            result["cashflow"] = normalize_cashflow_df(raw)
-        except Exception as e:
-            result["cashflow"] = pd.DataFrame()
-            warnings.append(f"hk_cashflow failed: {e}")
 
         return FetchResult(data=result, source="tushare", success=True, warnings=warnings)
 
@@ -152,7 +85,6 @@ class HKFetcher(BaseFetcher):
         try:
             fina = tushare_client.hk_fina_indicator(ts_code=ts_code)
             if fina is not None and not fina.empty:
-                # Sort by end_date descending to get the latest report
                 fina = fina.sort_values("end_date", ascending=False)
                 latest = fina.iloc[0]
 
@@ -189,14 +121,14 @@ class HKFetcher(BaseFetcher):
                 result["revenue_yoy"] = latest.get("operate_income_yoy")
                 result["profit_yoy"] = latest.get("holder_profit_yoy")
 
-                # Compute enterprise value = market_cap + total_debt - total_cash
-                mc = result.get("market_cap")
-                td = result.get("total_debt")
-                tc = result.get("total_cash")
-                if mc and td:
-                    result["enterprise_value"] = (
-                        float(mc) + float(td) - float(tc or 0)
-                    )
+                # Compute enterprise value
+                ev = self._compute_ev(
+                    result.get("market_cap"),
+                    result.get("total_debt"),
+                    result.get("total_cash"),
+                )
+                if ev is not None:
+                    result["enterprise_value"] = ev
         except Exception as e:
             warnings.append(f"hk_fina_indicator failed: {e}")
 

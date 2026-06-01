@@ -88,7 +88,7 @@ brief = tracker.generate_update_brief()
 1. 读取 Step 1-2 产出
 2. 如用户提供初始洞察（新闻/URL），先分析该信息
 3. WebSearch 搜索最近 1-3 个月的行业/公司动态
-4. 查找卖方一致预期数据（WebSearch + yfinance analyst targets）
+4. 查找卖方一致预期数据（WebSearch + Tushare MCP 报告数据）
 5. 对比我们的判断 vs 市场共识，定位预期差
 6. **Edge 分类评分（3.5）**：使用 `EdgeScorer` 对预期差来源分类评分
 7. 列出 0-3 个月催化剂时间表
@@ -373,9 +373,9 @@ kg.add_lesson("...", context="...", tickers=["..."])
 
 ## 市场规则
 
-- **美股**：报告用英文，yfinance 为主
-- **港股**：报告用中文，yfinance + akshare
-- **A 股**：报告用中文，akshare 为主
+- **美股**：报告用英文，Tushare Pro 为主（us_* 接口）
+- **港股**：报告用中文，Tushare Pro 为主（hk_* 接口）
+- **A 股**：报告用中文，Tushare Pro 为主（A 股接口）
 
 ## 估值体系
 

@@ -1,9 +1,8 @@
-from config.ticker_rules import detect_market, normalize_ticker
+from config.ticker_rules import normalize_ticker
 
 
 def get_fetcher(ticker: str):
-    market = detect_market(ticker)
-    normalized, market = normalize_ticker(ticker, market)
+    normalized, market = normalize_ticker(ticker)
 
     if market == "US":
         from src.data.us_fetcher import USFetcher

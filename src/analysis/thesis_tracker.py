@@ -15,16 +15,13 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import calendar
 from datetime import datetime, date
 from enum import Enum
-from pathlib import Path
 from typing import Optional
 import uuid
 
-from config.settings import WORKSPACES_DIR
-from src.storage import AtomicJSON
+from src.analysis._base import WorkspaceStateBase
 from src.analysis.catalyst_tracker import CatalystTracker
 
 
@@ -44,21 +41,15 @@ class ThesisStatus(str, Enum):
     EXPIRED = "expired"         # catalyst window passed without confirmation
 
 
-class ThesisTracker:
+class ThesisTracker(WorkspaceStateBase):
     """Manages a living investment thesis for a single stock."""
 
+    _state_file = "thesis.json"
+    _default_state = {"version": 1, "history": []}
+
     def __init__(self, workspace_dir: str):
-        self.workspace = WORKSPACES_DIR / workspace_dir
-        self.workspace.mkdir(parents=True, exist_ok=True)
-        self._store = AtomicJSON(self.workspace)
+        super().__init__(workspace_dir)
         self._catalyst_tracker = CatalystTracker(workspace_dir)
-        self._data = self._load()
-
-    def _load(self) -> dict:
-        return self._store.load("thesis.json", default={"version": 1, "history": []})
-
-    def _save(self):
-        self._store.save("thesis.json", self._data)
 
     def _current(self) -> Optional[dict]:
         """Return the latest thesis revision, or None."""

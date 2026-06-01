@@ -57,9 +57,33 @@ class AtomicJSON:
             return {"version": 1, "history": []}
         elif filename == "catalysts.json":
             return {"version": 1, "catalysts": [], "kill_switches": []}
-        elif filename == "edge_score.json":
+        elif filename in ("edge_score.json", "calibration_record.json"):
             return []
         return {}
+
+    def _atomic_write(self, filename: str, content: str) -> None:
+        """Write content to file atomically via temp file + os.replace.
+
+        Caller is responsible for acquiring the file lock.
+        """
+        filepath = self._dir / filename
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._dir), prefix=f".{filename}.tmp_", suffix=".json"
+        )
+        try:
+            os.write(fd, content.encode("utf-8"))
+            os.close(fd)
+            os.replace(tmp_path, str(filepath))
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def save(self, filename: str, data: dict | list) -> Path:
         """Atomically write JSON data.
@@ -85,27 +109,8 @@ class AtomicJSON:
                 except OSError:
                     pass  # Best-effort backup
 
-            # Write to temp file in same directory (same filesystem for atomic rename)
             content = json.dumps(data, ensure_ascii=False, indent=2)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(self._dir), prefix=f".{filename}.tmp_", suffix=".json"
-            )
-            try:
-                os.write(fd, content.encode("utf-8"))
-                os.close(fd)
-                os.replace(tmp_path, str(filepath))
-            except BaseException:
-                # Clean up temp file on any failure
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
-
+            self._atomic_write(filename, content)
             return filepath
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -142,23 +147,7 @@ class AtomicJSON:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
             content = json.dumps(data, ensure_ascii=False, indent=2)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(self._dir), prefix=f".{filename}.tmp_", suffix=".json"
-            )
-            try:
-                os.write(fd, content.encode("utf-8"))
-                os.close(fd)
-                os.replace(tmp_path, str(filepath))
-            except BaseException:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
+            self._atomic_write(filename, content)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()

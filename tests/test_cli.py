@@ -165,8 +165,7 @@ class TestCmdThesis:
         """Return context managers patching WORKSPACES_DIR for thesis + catalyst."""
         return (
             patch("src.cli.WORKSPACES_DIR", tmp_path / "workspaces"),
-            patch("src.analysis.thesis_tracker.WORKSPACES_DIR", tmp_path / "workspaces"),
-            patch("src.analysis.catalyst_tracker.WORKSPACES_DIR", tmp_path / "workspaces"),
+            patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"),
         )
 
     def _init_ws(self, tmp_path):
@@ -175,20 +174,20 @@ class TestCmdThesis:
     def test_thesis_create(self, tmp_path, capsys):
         self._init_ws(tmp_path)
         args = self._make_args("create", thesis="Test thesis: undervalued", hold_months=12)
-        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
             from src.cli import cmd_thesis
             cmd_thesis(args)
         assert "Thesis created" in capsys.readouterr().out
 
     def test_thesis_snapshot(self, tmp_path, capsys):
         self._init_ws(tmp_path)
-        with self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[1]:
             from src.analysis.thesis_tracker import ThesisTracker
             tracker = ThesisTracker("TEST")
             tracker.create("Snapshot test thesis")
 
         args = self._make_args("snapshot")
-        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
             from src.cli import cmd_thesis
             cmd_thesis(args)
         result = json.loads(capsys.readouterr().out)
@@ -196,20 +195,20 @@ class TestCmdThesis:
 
     def test_thesis_brief(self, tmp_path, capsys):
         self._init_ws(tmp_path)
-        with self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[1]:
             from src.analysis.thesis_tracker import ThesisTracker
             tracker = ThesisTracker("TEST")
             tracker.create("Brief test thesis")
 
         args = self._make_args("brief")
-        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
             from src.cli import cmd_thesis
             cmd_thesis(args)
         assert "Brief test thesis" in capsys.readouterr().out
 
     def test_thesis_add_hypothesis(self, tmp_path, capsys):
         self._init_ws(tmp_path)
-        with self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[1]:
             from src.analysis.thesis_tracker import ThesisTracker
             tracker = ThesisTracker("TEST")
             tracker.create("Hypothesis test")
@@ -220,20 +219,20 @@ class TestCmdThesis:
             date="2026-07-15",
             impact="high",
         )
-        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
             from src.cli import cmd_thesis
             cmd_thesis(args)
         assert "Hypothesis added" in capsys.readouterr().out
 
     def test_thesis_close(self, tmp_path, capsys):
         self._init_ws(tmp_path)
-        with self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[1]:
             from src.analysis.thesis_tracker import ThesisTracker
             tracker = ThesisTracker("TEST")
             tracker.create("Close test")
 
         args = self._make_args("close", status="closed_won", reason="Target reached")
-        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1], self._patch_ws(tmp_path)[2]:
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
             from src.cli import cmd_thesis
             cmd_thesis(args)
         assert "closed" in capsys.readouterr().out.lower()
@@ -255,7 +254,7 @@ class TestCmdCatalyst:
     def _patch_ws(self, tmp_path):
         return (
             patch("src.cli.WORKSPACES_DIR", tmp_path / "workspaces"),
-            patch("src.analysis.catalyst_tracker.WORKSPACES_DIR", tmp_path / "workspaces"),
+            patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"),
         )
 
     def _init_ws(self, tmp_path):

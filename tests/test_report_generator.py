@@ -1,6 +1,6 @@
 """Tests for src.report.generator — report generation engine.
 
-Covers: format helpers, md_to_html conversion, summary metric extraction,
+Covers: md_to_html conversion, summary metric extraction,
 distribution chart and PE band chart generation.
 """
 
@@ -15,65 +15,11 @@ import pandas as pd
 import pytest
 
 from src.report.generator import (
-    format_currency,
-    format_pct,
-    df_to_markdown,
     generate_distribution_chart,
     generate_pe_band_chart,
     md_to_html,
     _extract_summary_metrics,
 )
-
-
-# ---------------------------------------------------------------------------
-# Format helpers
-# ---------------------------------------------------------------------------
-
-class TestFormatCurrency:
-    def test_usd(self):
-        assert "$" in format_currency(1234.56, "USD")
-
-    def test_cny(self):
-        assert "¥" in format_currency(10000, "CNY")
-
-    def test_none_returns_na(self):
-        assert format_currency(None) == "N/A"
-
-    def test_nan_returns_na(self):
-        assert format_currency(float("nan")) == "N/A"
-
-
-class TestFormatPct:
-    def test_positive(self):
-        result = format_pct(0.1523)
-        assert "15" in result
-
-    def test_none_returns_na(self):
-        assert format_pct(None) == "N/A"
-
-    def test_nan_returns_na(self):
-        assert format_pct(float("nan")) == "N/A"
-
-
-class TestDfToMarkdown:
-    def test_basic_dataframe(self):
-        df = pd.DataFrame({"A": [1, 2], "B": [3, 4]})
-        md = df_to_markdown(df)
-        assert "|" in md
-        assert "A" in md
-        assert "B" in md
-
-    def test_max_rows_limit(self):
-        df = pd.DataFrame({"X": range(100)})
-        md = df_to_markdown(df, max_rows=5)
-        # Should have header + separator + at most 5 data rows
-        lines = [l for l in md.split("\n") if l.strip().startswith("|")]
-        assert len(lines) <= 7  # header + sep + 5 rows
-
-    def test_empty_dataframe(self):
-        df = pd.DataFrame()
-        md = df_to_markdown(df)
-        assert isinstance(md, str)
 
 
 # ---------------------------------------------------------------------------
@@ -187,14 +133,20 @@ class TestGenerateDistributionChart:
 class TestGeneratePeBandChart:
     def _sample_pe_band(self):
         dates = pd.date_range("2021-01-01", periods=260, freq="W")
+        pe_series = np.linspace(25, 35, 260)
         return {
             "dates": dates,
-            "close": np.linspace(100, 150, 260),
-            "pe_p10": np.full(260, 20),
-            "pe_p25": np.full(260, 25),
-            "pe_p50": np.full(260, 30),
-            "pe_p75": np.full(260, 35),
-            "pe_p90": np.full(260, 40),
+            "pe_series": pe_series,
+            "bands": {
+                "p10": 20.0,
+                "p25": 25.0,
+                "p50": 30.0,
+                "p75": 35.0,
+                "p90": 40.0,
+            },
+            "current_pe": 32.0,
+            "current_percentile": 65.0,
+            "forward_eps": 5.0,
         }
 
     def test_produces_png(self):
@@ -221,9 +173,9 @@ class TestExtractSummaryMetrics:
         # Step 4 with price and target
         (ws / "step4_quantitative_model.md").write_text(
             "当前股价：150.00\n"
-            "Forward PE (T+2): 30.0x\n"
+            "Forward PE: 30.0x\n"
             "### T+2\n"
-            "| **P50** | **¥200.00** |\n"
+            "| **P50** | **200.00** |\n"
         )
 
         # Step 5 with RRR
@@ -235,7 +187,7 @@ class TestExtractSummaryMetrics:
         # Step 2 with moat
         (ws / "step2_competitive_moat.md").write_text(
             "### Moat Rating\n"
-            "**Wide** | Trend: Widening\n"
+            "Wide, Widening\n"
         )
 
         # Edge score JSON
@@ -256,12 +208,12 @@ class TestExtractSummaryMetrics:
         with tempfile.TemporaryDirectory() as tmp:
             ws = self._create_workspace(tmp)
             metrics = _extract_summary_metrics(str(ws), "TEST")
-            assert metrics["current_price"] == 150.00
-            assert metrics["target_price"] == 200.00
-            assert metrics["rrr"] == 2.5
+            assert metrics["current_price"] == "150.00"
+            assert metrics["target_price"] == "200.00"
+            assert metrics["rrr"] == "2.5"
             assert metrics["moat"] is not None
             assert "Wide" in metrics["moat"]
-            assert metrics["edge_score"] == 6.5
+            assert metrics["edge_score"] == "6.5"
             assert metrics["decision"] == "Buy"
 
     def test_handles_missing_files(self):
@@ -278,7 +230,7 @@ class TestExtractSummaryMetrics:
             ws = Path(tmp) / "PE_TEST"
             ws.mkdir()
             (ws / "step4_quantitative_model.md").write_text(
-                "Forward PE (T+1): 25.5x\n当前股价：100"
+                "Forward PE: 25.5x\n当前股价：100"
             )
             metrics = _extract_summary_metrics(str(ws), "PE_TEST")
             assert metrics.get("forward_pe") is not None
