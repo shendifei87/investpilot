@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import t as t_dist
 from config.settings import MONTE_CARLO_SIMULATIONS, WORKSPACES_DIR
+from src.analysis._base import resolve_workspace_path
 from src.storage import AtomicJSON
 
 
@@ -372,7 +373,7 @@ def calc_rrr(price_distribution: np.ndarray, current_price: float) -> dict:
     # Kelly Criterion: f* = (p*b - q) / b, where b = odds = E[up]/E[down]
     kelly_full = 0.0
     kelly_half = 0.0
-    if e_downside > 0 and p_down > 0:
+    if e_downside > 0 and e_upside > 0 and p_down > 0:
         b = e_upside / e_downside  # payoff odds
         kelly_full = (p_up * b - p_down) / b
         kelly_full = max(kelly_full, 0.0)
@@ -411,7 +412,7 @@ def save_reviewed_assumptions(
     The saved file is checked by verify_assumption_consistency() before
     running Monte Carlo to prevent post-review drift.
     """
-    ws = WORKSPACES_DIR / workspace_dir
+    ws = resolve_workspace_path(workspace_dir)
     ws.mkdir(parents=True, exist_ok=True)
     store = AtomicJSON(ws)
     lock_file = ws / "_reviewed_assumptions.json"
@@ -434,7 +435,7 @@ def verify_assumption_consistency(
 
     Returns {passed: bool, warnings: list, violations: list}.
     """
-    ws = WORKSPACES_DIR / workspace_dir
+    ws = resolve_workspace_path(workspace_dir)
     store = AtomicJSON(ws)
 
     reviewed = store.load("_reviewed_assumptions.json")
@@ -503,7 +504,7 @@ def save_calibration(
     Call this at the end of Step 4 for each stock analyzed.
     After earnings, call update_calibration_actual() with the actual EPS.
     """
-    ws = WORKSPACES_DIR / workspace_dir
+    ws = resolve_workspace_path(workspace_dir)
     ws.mkdir(parents=True, exist_ok=True)
     store = AtomicJSON(ws)
 
@@ -537,7 +538,7 @@ def update_calibration_actual(
     """
     from datetime import datetime
 
-    ws = WORKSPACES_DIR / workspace_dir
+    ws = resolve_workspace_path(workspace_dir)
     store = AtomicJSON(ws)
 
     records = store.load("calibration_record.json", default=[])

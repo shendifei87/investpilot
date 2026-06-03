@@ -12,9 +12,24 @@ also manages its own persistence at the workspaces root level.
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 from config.settings import WORKSPACES_DIR
 from src.storage import AtomicJSON
+
+
+def resolve_workspace_path(workspace_dir: str | Path) -> Path:
+    """Resolve a workspace name or path without duplicating workspaces/.
+
+    Accepts both canonical workspace names ("600584.SH") and paths commonly
+    used in prompts ("workspaces/600584.SH"). Absolute paths are preserved.
+    """
+    path = Path(workspace_dir)
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == WORKSPACES_DIR.name:
+        return WORKSPACES_DIR.parent / path
+    return WORKSPACES_DIR / path
 
 
 class WorkspaceStateBase:
@@ -29,7 +44,7 @@ class WorkspaceStateBase:
     _default_state: dict | list
 
     def __init__(self, workspace_dir: str):
-        self.workspace = WORKSPACES_DIR / workspace_dir
+        self.workspace = resolve_workspace_path(workspace_dir)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self._store = AtomicJSON(self.workspace)
         # Deep-copy default to avoid shared mutable state across instances

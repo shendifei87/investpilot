@@ -67,6 +67,7 @@ class HKFetcher(BaseTushareFetcher):
         ts_code = self._ts_code(ticker)
         result = {}
         warnings = []
+        statement_start = self._start_date("3y")
 
         # ── hk_daily: latest price ──
         try:
@@ -76,14 +77,16 @@ class HKFetcher(BaseTushareFetcher):
                 ts_code=ts_code, start_date=start_date, end_date=end_date,
             )
             if price_df is not None and not price_df.empty:
-                latest = price_df.iloc[-1]
+                if "trade_date" in price_df.columns:
+                    price_df = price_df.sort_values("trade_date", ascending=False)
+                latest = price_df.iloc[0]
                 result["current_price"] = latest.get("close")
         except Exception as e:
             warnings.append(f"hk_daily for price failed: {e}")
 
         # ── hk_fina_indicator: comprehensive financial metrics ──
         try:
-            fina = tushare_client.hk_fina_indicator(ts_code=ts_code)
+            fina = tushare_client.hk_fina_indicator(ts_code=ts_code, start_date=statement_start)
             if fina is not None and not fina.empty:
                 fina = fina.sort_values("end_date", ascending=False)
                 latest = fina.iloc[0]

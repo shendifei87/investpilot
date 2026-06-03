@@ -148,7 +148,18 @@ def dcf_model(
     years: int,
     shares_outstanding: float,
 ) -> dict:
-    """Simple DCF model."""
+    """Simple DCF model.
+
+    Raises ValueError if terminal_growth >= wacc (perpetuity formula breaks down).
+    """
+    if terminal_growth >= wacc:
+        return {
+            "error": (
+                f"terminal_growth ({terminal_growth}) must be less than wacc ({wacc}). "
+                "The perpetuity growth model requires wacc > terminal_growth."
+            ),
+        }
+
     try:
         projected_fcf = []
         current_fcf = fcf

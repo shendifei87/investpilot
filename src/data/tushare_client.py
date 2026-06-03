@@ -12,7 +12,7 @@ from typing import Optional
 
 import pandas as pd
 
-from config.settings import TUSHARE_TOKEN
+from config.settings import get_tushare_token
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class TushareClient:
         if self._api is not None:
             return self._api
 
-        token = TUSHARE_TOKEN
+        token = get_tushare_token()
         if not token:
             raise RuntimeError(
                 "TUSHARE_TOKEN is not set. "
@@ -131,13 +131,24 @@ class TushareClient:
             params["start_date"] = start_date
         return self._call("fina_indicator", **params)
 
-    def daily_basic(self, ts_code: str = "", trade_date: str = "", **kwargs) -> pd.DataFrame:
+    def daily_basic(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        **kwargs,
+    ) -> pd.DataFrame:
         """Daily basic indicators (PE, PB, PS, total_mv, circ_mv, etc.)."""
         params = {**kwargs}
         if ts_code:
             params["ts_code"] = ts_code
         if trade_date:
             params["trade_date"] = trade_date
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         return self._call("daily_basic", **params)
 
     # ------------------------------------------------------------------

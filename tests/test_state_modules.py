@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from src.storage import AtomicJSON
+from src.analysis._base import resolve_workspace_path
 
 
 class TestAtomicJSONLoad:
@@ -136,3 +137,19 @@ class TestAtomicJSONRecover:
             store.save("data.json", {"ok": True})
             result = store.recover("data.json")
             assert result is None
+
+
+class TestWorkspacePathResolution:
+    def test_workspace_name_resolves_under_root(self, tmp_path, monkeypatch):
+        import src.analysis._base as base
+
+        monkeypatch.setattr(base, "WORKSPACES_DIR", tmp_path / "workspaces")
+        result = resolve_workspace_path("600584.SH")
+        assert result == tmp_path / "workspaces" / "600584.SH"
+
+    def test_prefixed_workspace_path_does_not_duplicate_root(self, tmp_path, monkeypatch):
+        import src.analysis._base as base
+
+        monkeypatch.setattr(base, "WORKSPACES_DIR", tmp_path / "workspaces")
+        result = resolve_workspace_path("workspaces/600584.SH")
+        assert result == tmp_path / "workspaces" / "600584.SH"

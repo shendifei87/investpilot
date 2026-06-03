@@ -9,7 +9,7 @@ def detect_market(ticker: str) -> Literal["US", "HK", "ASHARE"]:
     t = ticker.strip().upper()
     if t.endswith(".HK"):
         return "HK"
-    if t.endswith(".SZ") or t.endswith(".SS"):
+    if t.endswith(".SZ") or t.endswith(".SS") or t.endswith(".SH"):
         return "ASHARE"
     if t.isdigit() and len(t) == 6:
         return "ASHARE"
@@ -33,7 +33,7 @@ def normalize_ticker(ticker: str, market: str = None) -> Tuple[str, str]:
         return f"{t}.HK", market
 
     if market == "ASHARE":
-        if t.endswith(".SS") or t.endswith(".SZ"):
+        if t.endswith(".SS") or t.endswith(".SZ") or t.endswith(".SH"):
             return t, market
         if t.isdigit() and len(t) == 6:
             return f"{t}{_ashare_suffix(t)}", market
@@ -59,8 +59,8 @@ def get_tushare_code(ticker: str, market: str) -> str:
         return code.zfill(5)
 
     if market == "ASHARE":
-        # Strip existing suffixes (.SS used by yfinance, .SZ)
-        code = t.replace(".SS", "").replace(".SZ", "")
+        # Strip existing suffixes (.SS used by yfinance, .SH used by Tushare/SSE, .SZ)
+        code = t.replace(".SS", "").replace(".SH", "").replace(".SZ", "")
         if not code.isdigit() or len(code) != 6:
             return t  # return as-is for non-standard codes
         # Determine Shanghai (.SH) vs Shenzhen (.SZ)

@@ -8,6 +8,8 @@ All data sourced exclusively from Tushare Pro API:
   - fina_indicator: EPS, ROE, EBITDA, margins, etc.
 """
 
+from datetime import datetime, timedelta
+
 from src.data.base import BaseTushareFetcher, FetchResult
 
 
@@ -94,10 +96,17 @@ class AshareFetcher(BaseTushareFetcher):
         ts_code = self._ts_code(ticker)
         result = {}
         warnings = []
+        end_date = self._today()
+        recent_start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+        statement_start = self._start_date("3y")
 
         # ── daily_basic: price, PE, PB, shares, market cap ──
         try:
-            db = tushare_client.daily_basic(ts_code=ts_code)
+            db = tushare_client.daily_basic(
+                ts_code=ts_code,
+                start_date=recent_start,
+                end_date=end_date,
+            )
             if db is not None and not db.empty:
                 db = db.sort_values("trade_date", ascending=False)
                 latest = db.iloc[0]
@@ -117,8 +126,12 @@ class AshareFetcher(BaseTushareFetcher):
 
         # ── fina_indicator: EPS, BPS, ROE, EBITDA, margins ──
         try:
-            fina = tushare_client.fina_indicator(ts_code=ts_code)
+            fina = tushare_client.fina_indicator(ts_code=ts_code, start_date=statement_start)
             if fina is not None and not fina.empty:
+                if "end_date" in fina.columns:
+                    fina = fina.sort_values("end_date", ascending=False)
+                elif "ann_date" in fina.columns:
+                    fina = fina.sort_values("ann_date", ascending=False)
                 latest = fina.iloc[0]
                 result["eps_ttm"] = latest.get("eps")
                 result["book_value_per_share"] = latest.get("bps")
@@ -133,7 +146,7 @@ class AshareFetcher(BaseTushareFetcher):
 
         # ── Latest balance sheet for total_debt and cash ──
         try:
-            bs = tushare_client.balancesheet(ts_code=ts_code)
+            bs = tushare_client.balancesheet(ts_code=ts_code, start_date=statement_start)
             if bs is not None and not bs.empty:
                 bs = bs.sort_values("ann_date", ascending=False).drop_duplicates(
                     subset=["end_date"], keep="first"

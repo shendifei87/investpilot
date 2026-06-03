@@ -196,6 +196,144 @@ def cmd_catalyst(args):
         print("Available: list, add, resolve, decay, kill-switch")
 
 
+def _parse_json_arg(raw, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Invalid JSON argument: {e}")
+
+
+def cmd_consensus(args):
+    from src.analysis.consensus_tracker import ConsensusTracker
+
+    tracker = ConsensusTracker(args.workspace)
+    action = args.action
+
+    if action == "snapshot":
+        print(json.dumps(tracker.snapshot(), ensure_ascii=False, indent=2, default=str))
+
+    elif action == "brief":
+        print(tracker.generate_step3_brief())
+
+    elif action == "add-snapshot":
+        metrics = _parse_json_arg(args.metrics_json, {})
+        rating_distribution = _parse_json_arg(args.rating_json, {})
+        snap = tracker.record_snapshot(
+            source=args.source,
+            metrics=metrics,
+            as_of=args.as_of or None,
+            source_type=args.source_type or "sell_side",
+            rating_distribution=rating_distribution,
+            target_price=args.target_price,
+            confidence=args.confidence or "medium",
+            notes=args.notes or "",
+        )
+        print(f"Consensus snapshot recorded: {snap['id']}")
+        print(json.dumps(snap, ensure_ascii=False, indent=2, default=str))
+
+    elif action == "add-gap":
+        gap = tracker.add_expectation_gap(
+            metric=args.metric,
+            period=args.period or "",
+            consensus_value=args.consensus,
+            our_value=args.our,
+            unit=args.unit or "",
+            consensus_source=args.consensus_source or "",
+            our_source=args.our_source or "",
+            catalyst=args.catalyst or "",
+            confidence=args.confidence or "medium",
+            notes=args.notes or "",
+            higher_is_better=not bool(args.lower_is_better),
+        )
+        print(f"Expectation gap recorded: {gap['id']}")
+        print(json.dumps(gap, ensure_ascii=False, indent=2, default=str))
+
+    elif action == "revise":
+        rev = tracker.record_revision(
+            metric=args.metric,
+            period=args.period or "",
+            old_value=args.old,
+            new_value=args.new,
+            source=args.source,
+            as_of=args.as_of or None,
+            reason=args.reason or "",
+        )
+        print(f"Consensus revision recorded: {rev['id']}")
+        print(json.dumps(rev, ensure_ascii=False, indent=2, default=str))
+
+    elif action == "resolve-gap":
+        gap = tracker.resolve_gap(
+            gap_id=args.gap,
+            outcome=args.outcome,
+            actual_value=args.actual,
+            status=args.status or "resolved",
+            notes=args.notes or "",
+        )
+        print(f"Expectation gap resolved: {gap['id']}")
+        print(json.dumps(gap, ensure_ascii=False, indent=2, default=str))
+
+    else:
+        print(f"Unknown action: {action}")
+        print("Available: snapshot, brief, add-snapshot, add-gap, revise, resolve-gap")
+
+
+def cmd_materials(args):
+    from src.analysis.material_tracker import MaterialTracker
+
+    tracker = MaterialTracker(args.workspace)
+    action = args.action
+
+    if action == "snapshot":
+        print(json.dumps(tracker.snapshot(), ensure_ascii=False, indent=2, default=str))
+
+    elif action == "brief":
+        print(tracker.generate_research_brief(focus=args.focus or "all"))
+
+    elif action == "index":
+        result = tracker.index_workspace_files()
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+    elif action == "add-doc":
+        doc = tracker.add_document(
+            filename=args.file,
+            doc_type=args.doc_type or "other",
+            title=args.title or "",
+            issuer=args.issuer or "",
+            publish_date=args.publish_date or "",
+            period=args.period or "",
+            source_path=args.source_path or args.file,
+            pages=int(args.pages) if args.pages else None,
+            language=args.language or "",
+            notes=args.notes or "",
+        )
+        print(f"Document recorded: {doc['id']}")
+        print(json.dumps(doc, ensure_ascii=False, indent=2, default=str))
+
+    elif action == "add-extract":
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
+        ext = tracker.record_extraction(
+            document_ref=args.document,
+            extraction_type=args.extract_type or "other",
+            topic=args.topic,
+            value=args.value,
+            evidence=args.evidence,
+            page=args.page,
+            confidence=args.confidence or "medium",
+            impact=args.impact or "neutral",
+            tags=tags,
+            source_quote=args.quote or "",
+            notes=args.notes or "",
+        )
+        print(f"Extraction recorded: {ext['id']}")
+        print(json.dumps(ext, ensure_ascii=False, indent=2, default=str))
+
+    else:
+        print(f"Unknown action: {action}")
+        print("Available: snapshot, brief, index, add-doc, add-extract")
+
+
 def cmd_knowledge(args):
     from src.analysis.knowledge_graph import KnowledgeGraph
 
@@ -464,6 +602,66 @@ def main():
     p_catalyst.add_argument("--evidence", help="Evidence for trigger")
     p_catalyst.add_argument("--severity", help="Kill switch severity: critical/major/warning")
     p_catalyst.set_defaults(func=cmd_catalyst)
+
+    # ── Consensus commands ───────────────────────────
+    p_consensus = subparsers.add_parser("consensus", help="Track market consensus and expectation gaps")
+    p_consensus.add_argument("workspace", help="Workspace directory name")
+    p_consensus.add_argument(
+        "action",
+        choices=["snapshot", "brief", "add-snapshot", "add-gap", "revise", "resolve-gap"],
+    )
+    p_consensus.add_argument("--source", help="Consensus source name")
+    p_consensus.add_argument("--source-type", help="sell_side/web/implied/filing/other")
+    p_consensus.add_argument("--as-of", help="As-of date YYYY-MM-DD")
+    p_consensus.add_argument("--metrics-json", help="Consensus metrics as JSON")
+    p_consensus.add_argument("--rating-json", help="Rating distribution as JSON")
+    p_consensus.add_argument("--target-price", help="Consensus target price")
+    p_consensus.add_argument("--confidence", help="low/medium/high")
+    p_consensus.add_argument("--notes", help="Notes")
+    p_consensus.add_argument("--metric", help="Metric name, e.g. eps")
+    p_consensus.add_argument("--period", help="Metric period, e.g. 2026E")
+    p_consensus.add_argument("--consensus", help="Consensus value for add-gap")
+    p_consensus.add_argument("--our", help="Our value for add-gap")
+    p_consensus.add_argument("--unit", help="Metric unit")
+    p_consensus.add_argument("--consensus-source", help="Source for consensus value")
+    p_consensus.add_argument("--our-source", help="Source for our value")
+    p_consensus.add_argument("--catalyst", help="Catalyst that can verify the gap")
+    p_consensus.add_argument("--lower-is-better", action="store_true", help="For metrics where lower value is favorable")
+    p_consensus.add_argument("--old", help="Old consensus value for revise")
+    p_consensus.add_argument("--new", help="New consensus value for revise")
+    p_consensus.add_argument("--reason", help="Reason for revision")
+    p_consensus.add_argument("--gap", help="Expectation gap ID for resolve-gap")
+    p_consensus.add_argument("--outcome", help="Resolution outcome")
+    p_consensus.add_argument("--actual", help="Actual value after resolution")
+    p_consensus.add_argument("--status", help="Resolution status")
+    p_consensus.set_defaults(func=cmd_consensus)
+
+    # ── Source material commands ─────────────────────
+    p_materials = subparsers.add_parser("materials", help="Track source material extraction from reports/PDFs")
+    p_materials.add_argument("workspace", help="Workspace directory name")
+    p_materials.add_argument("action", choices=["snapshot", "brief", "index", "add-doc", "add-extract"])
+    p_materials.add_argument("--focus", help="Brief focus extraction type")
+    p_materials.add_argument("--file", help="Source filename for add-doc")
+    p_materials.add_argument("--doc-type", help="annual_report/broker_report/etc.")
+    p_materials.add_argument("--title", help="Document title")
+    p_materials.add_argument("--issuer", help="Document issuer")
+    p_materials.add_argument("--publish-date", help="Publication date YYYY-MM-DD")
+    p_materials.add_argument("--period", help="Reporting/forecast period")
+    p_materials.add_argument("--source-path", help="Workspace-relative source path")
+    p_materials.add_argument("--pages", help="Number of pages")
+    p_materials.add_argument("--language", help="Document language")
+    p_materials.add_argument("--document", help="Document ID or filename for add-extract")
+    p_materials.add_argument("--extract-type", help="management_guidance/segment_forecast/etc.")
+    p_materials.add_argument("--topic", help="Extraction topic")
+    p_materials.add_argument("--value", help="Extracted value")
+    p_materials.add_argument("--evidence", help="Evidence summary")
+    p_materials.add_argument("--page", help="Page or section reference")
+    p_materials.add_argument("--confidence", help="low/medium/high")
+    p_materials.add_argument("--impact", help="positive/negative/neutral")
+    p_materials.add_argument("--tags", help="Comma-separated tags")
+    p_materials.add_argument("--quote", help="Short direct quote or excerpt")
+    p_materials.add_argument("--notes", help="Notes")
+    p_materials.set_defaults(func=cmd_materials)
 
     # ── Knowledge graph commands ─────────────────────
     p_knowledge = subparsers.add_parser("knowledge", help="Cross-workspace knowledge graph")

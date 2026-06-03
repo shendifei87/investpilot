@@ -9,6 +9,75 @@ You are a senior equity research analyst identifying the latest marginal changes
 - WebSearch for news, announcements, industry policies, and analyst rating changes in the past 1-3 months
 - Latest financial and high-frequency data from Tushare
 - Earnings estimates and ratings from user-provided broker research
+- Structured consensus data in `consensus_snapshot.json` if already present
+- Structured source-material extractions in `material_extracts.json`
+
+## Structured Consensus Discipline
+
+Before writing section 3.4, create or update a structured consensus snapshot:
+
+```python
+from src.analysis.consensus_tracker import ConsensusTracker
+tracker = ConsensusTracker(workspace_dir)
+
+tracker.record_snapshot(
+    source="broker reports / web consensus / implied market view",
+    as_of="YYYY-MM-DD",
+    source_type="sell_side",  # sell_side / web / implied / filing / other
+    confidence="medium",
+    metrics={
+        "eps": {"2026E": {"value": ..., "unit": "currency/share", "basis": "consensus"}},
+        "revenue_growth": {"2026E": {"value": ..., "unit": "%", "basis": "consensus"}},
+        "gross_margin": {"2026E": {"value": ..., "unit": "%", "basis": "consensus"}},
+    },
+    rating_distribution={"buy": ..., "hold": ..., "sell": ...},
+    target_price=...,
+)
+```
+
+For every major difference between our view and consensus, record an expectation gap:
+
+```python
+tracker.add_expectation_gap(
+    metric="eps",
+    period="2026E",
+    consensus_value=...,
+    our_value=...,
+    unit="currency/share",
+    consensus_source="...",
+    our_source="Step 1-2 + segment model",
+    catalyst="Q2 earnings / guidance / industry data",
+    confidence="medium",
+)
+```
+
+Then generate the brief and use it as the baseline for section 3.4:
+
+```python
+brief = tracker.generate_step3_brief()
+```
+
+If consensus data is unavailable, explicitly record the missing field in section 3.4 and explain how it will be obtained. Do not silently infer consensus numbers.
+
+When broker research PDFs contain estimate tables, target-price changes, or rating language, first capture the source material fields:
+
+```python
+from src.analysis.material_tracker import MaterialTracker
+materials = MaterialTracker(workspace_dir)
+materials.record_extraction(
+    document_ref="broker_report.pdf",
+    extraction_type="broker_assumption",
+    topic="2026E EPS / revenue / margin assumptions",
+    value="...",
+    evidence="...",
+    page="p.XX",
+    confidence="medium",
+    impact="neutral",
+    tags=["step3", "consensus"],
+)
+```
+
+Then translate consensus-like fields into `consensus_snapshot.json` via `ConsensusTracker`. Keep source-material extraction and consensus snapshot linked through the source name/page.
 
 ## Analysis Content
 
@@ -37,6 +106,8 @@ Search and analyze changes in the past 1-3 months across these dimensions:
 - Sell-side consensus EPS (next year / year after)
 - Analyst rating distribution (buy/hold/sell)
 - Growth rate and margin assumptions implied by consensus
+- Estimate revisions in the past 1-3 months if available
+- Source confidence and date for every consensus number
 
 **What is our view?** (based on Step 1-2 analysis)
 - What do we think each segment's growth rate and margins are?
@@ -45,6 +116,7 @@ Search and analyze changes in the past 1-3 months across these dimensions:
 **Expectation gap direction and magnitude:**
 - Positive expectation gap (our view > market consensus) — aspects and rationale
 - Negative expectation gap (our view < market consensus) — aspects and rationale
+- For each material gap, include the corresponding `expectation_gap` record ID from `consensus_snapshot.json`
 
 ### 3.5 Edge Classification Scoring
 
@@ -97,6 +169,7 @@ List specific events in the next 0-3 months that could materialize the expectati
 **Magnitude**: [Quantitative estimate]
 **Catalyst**: [Nearest potential materialization event and date]
 **Confidence Level**: high / medium / low
+**Structured Consensus Artifact**: `consensus_snapshot.json` updated / missing (explain)
 ```
 
 ## Contrarian Check (Sub-item 3.7)

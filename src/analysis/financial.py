@@ -37,6 +37,19 @@ _CASHFLOW_ALIASES = {
 }
 
 
+def _sort_series_by_date(s: pd.Series) -> pd.Series:
+    """Return a series sorted oldest-to-newest when the index is date-like."""
+    try:
+        idx = pd.to_datetime(s.index, errors="coerce")
+    except (TypeError, ValueError):
+        return s
+    if idx.isna().all():
+        return s
+    out = s.copy()
+    out.index = idx
+    return out.sort_index()
+
+
 def _get_series(df, field, aliases, warnings_list=None):
     """Extract a numeric series from a financial DataFrame.
 
@@ -48,7 +61,7 @@ def _get_series(df, field, aliases, warnings_list=None):
 
     # yfinance: financial items as index, dates as columns
     if field in df.index:
-        return df.loc[field]
+        return _sort_series_by_date(pd.to_numeric(df.loc[field], errors="coerce"))
 
     # akshare: financial items as columns, dates in a column
     all_names = (field,) + aliases
@@ -59,7 +72,7 @@ def _get_series(df, field, aliases, warnings_list=None):
                 if date_col in df.columns:
                     s.index = pd.to_datetime(df[date_col])
                     break
-            return s
+            return _sort_series_by_date(s)
 
     msg = f"Field '{field}' not found in DataFrame (tried aliases: {aliases})"
     if warnings_list is not None:

@@ -160,6 +160,17 @@ class KnowledgeGraph:
     def _save(self):
         self._store.save("_knowledge_graph.json", self._data)
 
+    @staticmethod
+    def _median(values: list) -> float | None:
+        """Return median of a list, handling both odd and even lengths."""
+        if not values:
+            return None
+        s = sorted(values)
+        n = len(s)
+        if n % 2 == 1:
+            return s[n // 2]
+        return (s[n // 2 - 1] + s[n // 2]) / 2
+
     # ── Record research outcomes ─────────────────────────
 
     def record_research(
@@ -484,7 +495,7 @@ class KnowledgeGraph:
             "industries_covered": sorted(industries),
             "themes_covered": sorted(all_themes),
             "avg_rrr": round(sum(rrrs) / len(rrrs), 2) if rrrs else None,
-            "median_rrr": sorted(rrrs)[len(rrrs) // 2] if rrrs else None,
+            "median_rrr": self._median(rrrs),
             "win_rate": f"{sum(1 for r in returns if r > 0)}/{len(returns)}" if returns else "N/A",
             "avg_return_pct": round(sum(returns) / len(returns), 1) if returns else None,
             "n_patterns": len(self._data.get("patterns", [])),

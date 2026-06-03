@@ -44,6 +44,7 @@ a:hover { text-decoration: underline; }
 .ws-card .ticker { font-size: 18px; font-weight: 700; color: #f0f6fc; }
 .ws-card .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; vertical-align: middle; }
 .ws-card .status-badge.ready { background: #1f3a1f; color: #3fb950; }
+.ws-card .status-badge.triaged { background: #332b12; color: #d29922; }
 .ws-card .status-badge.in_progress { background: #1f2d3d; color: #58a6ff; }
 .ws-card .status-badge.completed { background: #1f3a1f; color: #3fb950; }
 .ws-card .status-badge.empty { background: #2d1117; color: #8b949e; }
@@ -210,11 +211,15 @@ async function loadList() {
     const reportBtn = (ws.reports && ws.reports.length > 0)
       ? `<a class="report-btn" href="/api/research/${ws.ticker}/report/${ws.reports[0]}" target="_blank" onclick="event.stopPropagation()">View Report</a>`
       : '';
+    const triageLabel = ws.triage_status === 'completed'
+      ? '<span style="font-size:11px;color:#d29922;">Triage done</span>'
+      : '';
     return `<div class="ws-card" onclick="showDetail('${ws.ticker}')">
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="ticker">${ws.ticker}</span>
         <span class="status-badge ${ws.status}">${ws.status.replace('_', ' ')}</span>
         ${ws.has_materials ? '<span style="font-size:11px;color:#8b949e;">PDFs loaded</span>' : '<span style="font-size:11px;color:#f85149;">No PDFs</span>'}
+        ${triageLabel}
       </div>
       <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
         <div class="progress-bar" style="flex:1;"><div class="progress-fill" style="width:${pct}%"></div></div>
@@ -270,10 +275,14 @@ async function loadDetail(ticker) {
   });
 
   stepsEl.innerHTML = '';
-  for (let n = 1; n <= 7; n++) {
+  const stepNums = Object.keys(data.steps).map(Number).sort((a, b) => a - b);
+  for (const n of stepNums) {
     const step = data.steps[n];
     const done = step.status === 'completed';
     const isOpen = prevOpen.has(n);
+    const pendingText = n === 0
+      ? 'Not yet completed. Run Quick Triage before committing to full research.'
+      : 'Not yet completed. Run the research pipeline in Claude Code.';
 
     const stepEl = document.createElement('div');
     stepEl.className = `step ${done ? 'completed' : ''} ${isOpen ? 'open' : ''}`;
@@ -285,7 +294,7 @@ async function loadDetail(ticker) {
         <div class="step-status">${done ? 'Completed' : 'Pending'}</div>
       </div>
       <div class="step-body">
-        <div class="step-content" id="step-content-${n}">${done ? '<div class="step-loading">Loading...</div>' : 'Not yet completed. Run the research pipeline in Claude Code.'}</div>
+        <div class="step-content" id="step-content-${n}">${done ? '<div class="step-loading">Loading...</div>' : pendingText}</div>
       </div>
     `;
     stepsEl.appendChild(stepEl);

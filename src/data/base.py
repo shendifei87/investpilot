@@ -156,12 +156,15 @@ class BaseTushareFetcher(BaseFetcher):
         )
 
         ts_code = self._ts_code(ticker)
+        start_date = self._start_date("5y")
         result = {}
         warnings = []
 
         # Income statement
         try:
-            raw = getattr(tushare_client, self.api_methods["income"])(ts_code=ts_code)
+            raw = getattr(tushare_client, self.api_methods["income"])(
+                ts_code=ts_code, start_date=start_date,
+            )
             result["income"] = normalize_income_df(raw)
         except Exception as e:
             result["income"] = pd.DataFrame()
@@ -169,7 +172,9 @@ class BaseTushareFetcher(BaseFetcher):
 
         # Balance sheet
         try:
-            raw = getattr(tushare_client, self.api_methods["balance_sheet"])(ts_code=ts_code)
+            raw = getattr(tushare_client, self.api_methods["balance_sheet"])(
+                ts_code=ts_code, start_date=start_date,
+            )
             result["balance_sheet"] = normalize_balance_df(raw)
         except Exception as e:
             result["balance_sheet"] = pd.DataFrame()
@@ -177,7 +182,9 @@ class BaseTushareFetcher(BaseFetcher):
 
         # Cash flow
         try:
-            raw = getattr(tushare_client, self.api_methods["cashflow"])(ts_code=ts_code)
+            raw = getattr(tushare_client, self.api_methods["cashflow"])(
+                ts_code=ts_code, start_date=start_date,
+            )
             result["cashflow"] = normalize_cashflow_df(raw)
         except Exception as e:
             result["cashflow"] = pd.DataFrame()
@@ -187,7 +194,9 @@ class BaseTushareFetcher(BaseFetcher):
         if "fina_indicator" in self.api_methods:
             try:
                 from src.data.tushare_normalizer import normalize_fina_indicator_df
-                raw = getattr(tushare_client, self.api_methods["fina_indicator"])(ts_code=ts_code)
+                raw = getattr(tushare_client, self.api_methods["fina_indicator"])(
+                    ts_code=ts_code, start_date=start_date,
+                )
                 result["financial_ratios"] = normalize_fina_indicator_df(raw)
             except Exception as e:
                 warnings.append(f"{self.api_methods['fina_indicator']} failed: {e}")

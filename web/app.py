@@ -21,6 +21,7 @@ WORKSPACES = ROOT / "workspaces"
 WEB = Path(__file__).resolve().parent
 
 STEP_FILES = {
+    0: "step0_quick_triage.md",
     1: "step1_business_analysis.md",
     2: "step2_competitive_moat.md",
     3: "step3_marginal_changes.md",
@@ -31,6 +32,7 @@ STEP_FILES = {
 }
 
 STEP_NAMES = {
+    0: "Quick Triage",
     1: "Business Deep Dive",
     2: "Competitive Moat",
     3: "Marginal Changes & Expectation Gap",
@@ -40,20 +42,40 @@ STEP_NAMES = {
     7: "Research Director Review",
 }
 
+CORE_STEP_NUMBERS = tuple(range(1, 8))
+DISPLAY_STEP_NUMBERS = tuple(sorted(STEP_FILES))
+
 # Security configuration
 AUTH_TOKEN = os.environ.get("INVESTPILOT_TOKEN", "")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 ALLOWED_UPLOAD_EXT = {".pdf", ".csv", ".json", ".md"}
 CORS_ORIGIN = os.environ.get("INVESTPILOT_CORS_ORIGIN", "")
+_WORKSPACE_NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9._-]{0,63}$")
+_MATERIAL_EXTS = {".pdf"}
+
+
+def _workspace_material_files(ws_dir: Path) -> list[Path]:
+    """Return user-provided material files, case-insensitive.
+
+    Manual Finder uploads on macOS often preserve extensions like ".PDF";
+    Path.glob("*.pdf") misses those and made fresh workspaces look empty.
+    """
+    if not ws_dir.exists():
+        return []
+    return [
+        p for p in ws_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in _MATERIAL_EXTS
+    ]
 
 
 def get_workspace_status(ws_dir: Path) -> dict:
-    has_pdfs = bool(list(ws_dir.glob("*.pdf")))
+    material_files = _workspace_material_files(ws_dir)
+    has_pdfs = bool(material_files)
     steps = {}
     completed = 0
-    for n in range(1, 8):
+    for n in DISPLAY_STEP_NUMBERS:
         done = (ws_dir / STEP_FILES[n]).exists()
-        if done:
+        if n in CORE_STEP_NUMBERS and done:
             completed += 1
         steps[n] = {
             "name": STEP_NAMES[n],
@@ -61,19 +83,24 @@ def get_workspace_status(ws_dir: Path) -> dict:
             "status": "completed" if done else "pending",
         }
 
+    triage_done = steps[0]["status"] == "completed"
     status = "empty"
     if completed > 0:
         status = "in_progress"
-    if completed == 7:
+    if completed == len(CORE_STEP_NUMBERS):
         status = "completed"
+    elif triage_done and completed == 0:
+        status = "triaged"
     elif has_pdfs and completed == 0:
         status = "ready"
 
     return {
         "has_materials": has_pdfs,
+        "materials": [p.name for p in material_files],
         "steps": steps,
         "completed": completed,
-        "total": 7,
+        "total": len(CORE_STEP_NUMBERS),
+        "triage_status": steps[0]["status"],
         "status": status,
     }
 
@@ -91,6 +118,17 @@ def _safe_path(base: Path, user_path: str) -> Path | None:
         return resolved
     except ValueError:
         return None
+
+
+def _workspace_path(ticker: str) -> tuple[str, Path] | None:
+    """Return a safe workspace path for a URL/body ticker."""
+    normalized = unquote(str(ticker)).strip().upper()
+    if not _WORKSPACE_NAME_RE.fullmatch(normalized):
+        return None
+    path = _safe_path(WORKSPACES, normalized)
+    if path is None:
+        return None
+    return normalized, path
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -135,6 +173,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"error": "Request too large"}).encode())
 
+    def _drain_request_body(self):
+        """Read and discard remaining request body before returning errors."""
+        try:
+            remaining = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            remaining = 0
+        if remaining > 0:
+            self.rfile.read(remaining)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self._cors()
@@ -174,8 +221,11 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/research/([^/]+)/status$", path)
         if m:
-            ticker = m.group(1)
-            ws = WORKSPACES / ticker
+            resolved = _workspace_path(m.group(1))
+            if resolved is None:
+                self._json({"error": "Workspace not found"}, 404)
+                return
+            ticker, ws = resolved
             if not ws.exists():
                 self._json({"error": "Workspace not found"}, 404)
                 return
@@ -188,9 +238,17 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/research/([^/]+)/step/(\d+)$", path)
         if m:
-            ticker, step = m.group(1), int(m.group(2))
-            ws = WORKSPACES / ticker
-            step_file = ws / STEP_FILES.get(step, "")
+            resolved = _workspace_path(m.group(1))
+            if resolved is None:
+                self._json({"error": "Step not found"}, 404)
+                return
+            ticker, ws = resolved
+            step = int(m.group(2))
+            step_filename = STEP_FILES.get(step)
+            if not step_filename:
+                self._json({"error": "Step not found"}, 404)
+                return
+            step_file = ws / step_filename
             if not step_file.exists():
                 self._json({"error": "Step not found"}, 404)
                 return
@@ -200,8 +258,13 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/research/([^/]+)/image/(.+)$", path)
         if m:
-            ticker, img = m.group(1), m.group(2)
-            img_path = _safe_path(WORKSPACES / ticker, img)
+            resolved = _workspace_path(m.group(1))
+            if resolved is None:
+                self._json({"error": "Not found"}, 404)
+                return
+            ticker, ws = resolved
+            img = unquote(m.group(2))
+            img_path = _safe_path(ws, img)
             if img_path is None or not img_path.exists() or img_path.suffix != ".png":
                 self._json({"error": "Not found"}, 404)
                 return
@@ -213,8 +276,13 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/research/([^/]+)/report/(.+)$", path)
         if m:
-            ticker, filename = m.group(1), m.group(2)
-            file_path = _safe_path(WORKSPACES / ticker, filename)
+            resolved = _workspace_path(m.group(1))
+            if resolved is None:
+                self._json({"error": "Not found"}, 404)
+                return
+            ticker, ws = resolved
+            filename = unquote(m.group(2))
+            file_path = _safe_path(ws, filename)
             if file_path is None or not file_path.exists() or file_path.suffix != ".html":
                 self._json({"error": "Not found"}, 404)
                 return
@@ -247,7 +315,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "Ticker is required"}, 400)
                 return
 
-            ws = WORKSPACES / ticker
+            resolved = _workspace_path(ticker)
+            if resolved is None:
+                self._json({"error": "Invalid ticker"}, 400)
+                return
+            ticker, ws = resolved
             ws.mkdir(parents=True, exist_ok=True)
 
             if notes:
@@ -302,8 +374,14 @@ class Handler(BaseHTTPRequestHandler):
         return files
 
     def _handle_upload(self, ticker):
-        ws = WORKSPACES / ticker
+        resolved = _workspace_path(ticker)
+        if resolved is None:
+            self._drain_request_body()
+            self._json({"error": "Invalid ticker"}, 400)
+            return
+        ticker, ws = resolved
         if not ws.exists():
+            self._drain_request_body()
             self._json({"error": "Workspace not found"}, 404)
             return
 

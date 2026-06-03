@@ -214,6 +214,13 @@ HTML_SKELETON = """\
 
 STEP_CONFIG = [
     {
+        "key": "step0",
+        "file": "step0_quick_triage.md",
+        "icon": "fas fa-filter",
+        "title": "Step 0: 快速筛选",
+        "optional": True,
+    },
+    {
         "key": "step1",
         "file": "step1_business_analysis.md",
         "icon": "fas fa-building",

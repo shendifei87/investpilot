@@ -4,7 +4,7 @@ A deep fundamental investment research harness built on Claude Code. Seeks signi
 
 ## Features
 
-- **7-Step Deep Research Pipeline** — Business Analysis → Competitive Moat → Marginal Changes → Quantitative Modeling → Trading Strategy → Auditing → Research Director Review
+- **Quick Triage Gate + 7-Step Deep Research Pipeline** — PASS / WATCH / FULL_RESEARCH screening before full research
 - **Monte Carlo Simulation** — t-Copula dependency structure + Kelly criterion position sizing
 - **Multi-Market Support** — A-share, Hong Kong, US stocks (data source: Tushare Pro)
 - **Expectation Gap Driven** — 4-dimension Edge classification scoring + catalyst time-decay tracking
@@ -56,11 +56,17 @@ python -m src.cli fetch AAPL -o workspaces/AAPL
 
 ### 3. Launch Research
 
-Enter a stock ticker in Claude Code to trigger the 7-step analysis pipeline:
+Enter a stock ticker in Claude Code to trigger Quick Triage before the 7-step analysis pipeline:
 
 ```
 > Research AAPL
 ```
+
+Quick Triage writes `workspaces/AAPL/step0_quick_triage.md` and returns one of:
+
+- `PASS`: stop unless explicitly overridden
+- `WATCH`: monitor defined triggers before full research
+- `FULL_RESEARCH`: continue Business Analysis → Competitive Moat → Marginal Changes → Quantitative Modeling → Trading Strategy → Auditing → Research Director Review
 
 See [CLAUDE.md](CLAUDE.md) for the full workflow details.
 
@@ -74,6 +80,8 @@ See [CLAUDE.md](CLAUDE.md) for the full workflow details.
 | `analyze <ticker>` | Technical analysis (MA / RSI / MACD) |
 | `thesis <action>` | Manage investment thesis lifecycle |
 | `catalyst <action>` | Track catalysts with time decay |
+| `consensus <action>` | Track market consensus, revisions, and expectation gaps |
+| `materials <action>` | Track structured extraction from annual reports and broker PDFs |
 | `knowledge <action>` | Knowledge graph operations |
 | `report <workspace>` | Generate HTML research report |
 
@@ -94,6 +102,8 @@ investpilot/
 │   │   ├── step4_validate.py  # Step 4 pre-flight validator (15 checks)
 │   │   ├── thesis_tracker.py  # Thesis lifecycle management
 │   │   ├── catalyst_tracker.py # Catalyst tracking + time decay
+│   │   ├── consensus_tracker.py # Structured consensus + expectation gap tracking
+│   │   ├── material_tracker.py  # Structured extraction from reports/PDFs
 │   │   ├── edge_scorer.py     # 4-dimension Edge scoring
 │   │   └── knowledge_graph.py # Cross-stock knowledge graph
 │   ├── data/              # Data fetching layer

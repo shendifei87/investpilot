@@ -31,8 +31,42 @@ MARKET_CONFIG = {
     },
 }
 
+# ── Environment helpers ──────────────────────────────────────────
+def _read_dotenv_value(key: str) -> str:
+    """Read KEY from a simple project-level .env file without extra deps."""
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return ""
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip() != key:
+                continue
+            return v.strip().strip('"').strip("'")
+    except OSError:
+        return ""
+    return ""
+
+
+def get_env_value(key: str, default: str = "") -> str:
+    """Read env dynamically, falling back to project .env.
+
+    Some CLI/web sessions import config before the shell env is updated; callers
+    that need fresh credentials should call this function instead of relying
+    only on import-time constants.
+    """
+    return os.getenv(key, "") or _read_dotenv_value(key) or default
+
+
 # ── Tushare ──────────────────────────────────────────────────────
-TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
+TUSHARE_TOKEN = get_env_value("TUSHARE_TOKEN", "")
+
+
+def get_tushare_token() -> str:
+    return get_env_value("TUSHARE_TOKEN", TUSHARE_TOKEN)
 
 # ── Monte Carlo ──────────────────────────────────────────────────
 MONTE_CARLO_SIMULATIONS = int(os.getenv("MC_SIMS", "100000"))

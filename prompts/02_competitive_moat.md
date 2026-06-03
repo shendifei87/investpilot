@@ -8,6 +8,37 @@ You are a senior equity research analyst performing competitive moat analysis.
 - Industry data from `python -m src.cli fetch {ticker}`
 - WebSearch for competitor information, industry landscape, latest competitive dynamics
 - Industry comparison analysis from user-provided broker research
+- Structured source-material brief from `material_extracts.json`
+
+Before writing Step 2, load source-material extractions:
+
+```python
+from src.analysis.material_tracker import MaterialTracker
+materials = MaterialTracker(workspace_dir)
+brief = materials.generate_research_brief(focus="all")
+```
+
+Step 2 should especially use:
+- `moat_evidence`: pricing power, switching cost, patent/license, scale, or customer-stickiness evidence
+- `risk_factor`: disclosed forces that may erode the moat
+- `broker_assumption`: peer comparison and competitive landscape assumptions from broker reports
+- `thesis_conflict`: source-material evidence that contradicts the moat thesis
+
+If broker reports contain competitive claims, record them before using them:
+
+```python
+materials.record_extraction(
+    document_ref="broker_report.pdf",
+    extraction_type="moat_evidence",
+    topic="Switching cost / pricing power / scale advantage",
+    value="...",
+    evidence="...",
+    page="p.XX",
+    confidence="medium",
+    impact="positive",
+    tags=["step2", "moat"],
+)
+```
 
 ## Analysis Content
 
@@ -87,6 +118,8 @@ After completing 2.1-2.5, output a summary table:
 | 2.2 Trend Assessment | medium | [source] | [risk] |
 | ... | ... | ... | ... |
 ```
+
+Also cite the key `material_extracts.json` document/extraction IDs behind the moat rating and valuation constraint.
 
 ## Contrarian Check (Sub-item 2.6)
 

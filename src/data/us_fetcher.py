@@ -70,6 +70,7 @@ class USFetcher(BaseTushareFetcher):
         ts_code = self._ts_code(ticker)
         result = {}
         warnings = []
+        statement_start = self._start_date("3y")
 
         # ── us_daily_adj: price, shares, market cap ──
         try:
@@ -79,7 +80,9 @@ class USFetcher(BaseTushareFetcher):
                 ts_code=ts_code, start_date=start_date, end_date=end_date,
             )
             if adj_df is not None and not adj_df.empty:
-                latest = adj_df.iloc[-1]
+                if "trade_date" in adj_df.columns:
+                    adj_df = adj_df.sort_values("trade_date", ascending=False)
+                latest = adj_df.iloc[0]
                 result["current_price"] = latest.get("close")
                 if latest.get("total_share"):
                     result["shares_outstanding"] = float(latest["total_share"])
@@ -96,7 +99,9 @@ class USFetcher(BaseTushareFetcher):
                 ts_code=ts_code, start_date=start_date, end_date=end_date,
             )
             if daily_df is not None and not daily_df.empty:
-                latest = daily_df.iloc[-1]
+                if "trade_date" in daily_df.columns:
+                    daily_df = daily_df.sort_values("trade_date", ascending=False)
+                latest = daily_df.iloc[0]
                 if latest.get("pe"):
                     result["pe_ttm_api"] = latest.get("pe")
                 if latest.get("pb"):
@@ -109,7 +114,7 @@ class USFetcher(BaseTushareFetcher):
 
         # ── us_fina_indicator: EPS, margins, profitability ──
         try:
-            fina = tushare_client.us_fina_indicator(ts_code=ts_code)
+            fina = tushare_client.us_fina_indicator(ts_code=ts_code, start_date=statement_start)
             if fina is not None and not fina.empty:
                 fina = fina.sort_values("end_date", ascending=False)
                 latest = fina.iloc[0]
@@ -128,7 +133,7 @@ class USFetcher(BaseTushareFetcher):
 
         # ── Estimate total_debt from balance sheet (key-value format) ──
         try:
-            bs_df = tushare_client.us_balancesheet(ts_code=ts_code)
+            bs_df = tushare_client.us_balancesheet(ts_code=ts_code, start_date=statement_start)
             if bs_df is not None and not bs_df.empty and "ind_name" in bs_df.columns:
                 liab_row = bs_df[bs_df["ind_name"].str.contains(
                     "总负债|total.liabil", case=False, na=False

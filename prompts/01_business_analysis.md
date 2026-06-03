@@ -10,6 +10,47 @@ You must synthesize information from the following three sources, without neglec
 2. **Structured data**: Financial data obtained via `python -m src.cli fetch {ticker}`, stored as CSV files in the workspace directory.
 3. **Latest news**: Use WebSearch to find recent industry developments, competitive landscape changes, and major announcements.
 
+## Source Material Structuring Discipline
+
+Before writing Step 1, index and structure the workspace materials:
+
+```python
+from src.analysis.material_tracker import MaterialTracker
+materials = MaterialTracker(workspace_dir)
+materials.index_workspace_files()
+```
+
+For every annual/interim report and broker report that materially informs the analysis, record typed extractions into `material_extracts.json`:
+
+```python
+materials.record_extraction(
+    document_ref="annual_report.pdf",  # document ID or filename
+    extraction_type="management_guidance",
+    topic="2026 revenue outlook / segment mix / margin guidance",
+    value="...",
+    evidence="...",
+    page="MD&A p.XX",
+    confidence="high",
+    impact="positive / negative / neutral",
+    tags=["step1", "mda", "guidance"],
+)
+```
+
+Minimum extraction coverage for Step 1:
+- `business_overview`: core products, customers, value-chain role
+- `management_guidance`: MD&A forward-looking statements and risk language
+- `segment_forecast`: segment revenue/margin clues from annual report or broker research
+- `financial_fact`: reported segment revenue, margin, customer concentration, capacity, utilization
+- `risk_factor`: risks disclosed by management that could reverse the business outlook
+
+Generate and use the brief:
+
+```python
+brief = materials.generate_research_brief()
+```
+
+If a PDF is read but has no structured extraction, explicitly explain why in the Confidence & Data Source Summary.
+
 ## Analysis Content (must cover all items)
 
 ### 1.1 Company Product Analysis
@@ -114,6 +155,8 @@ After completing 1.1-1.7, output a summary table:
 | 1.2 Segment Breakdown | medium | [source] | [risk] |
 | ... | ... | ... | ... |
 ```
+
+Also state whether `material_extracts.json` was updated and which document IDs support the highest-impact conclusions.
 
 ## Contrarian Check (Sub-item 1.8)
 

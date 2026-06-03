@@ -1,8 +1,11 @@
 import re
+import json
 import base64
+from html import escape
 import numpy as np
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 
 def generate_distribution_chart(
@@ -140,6 +143,7 @@ def generate_pe_band_chart(
 
 def _convert_inline(text: str) -> str:
     """Convert inline markdown: **bold** -> <strong>, `code` -> <code>."""
+    text = escape(str(text), quote=True)
     text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
     text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
     return text
@@ -167,6 +171,28 @@ def _convert_table(lines: list) -> str:
     return f'<table>{html}</table>'
 
 
+def _safe_workspace_file(workspace_dir: Path, user_path: str) -> Optional[Path]:
+    """Resolve a markdown asset path and require it to stay under workspace."""
+    resolved = (workspace_dir / user_path).resolve()
+    base = workspace_dir.resolve()
+    try:
+        resolved.relative_to(base)
+        return resolved
+    except ValueError:
+        return None
+
+
+def _image_mime(img_path: Path) -> str:
+    suffix = img_path.suffix.lower()
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }.get(suffix, "image/png")
+
+
 def _convert_image(line: str, workspace_dir) -> str:
     """Convert ![alt](file.png) to base64-embedded <img>."""
     m = re.match(r'!\[([^\]]*)\]\(([^)]+)\)', line.strip())
@@ -174,13 +200,18 @@ def _convert_image(line: str, workspace_dir) -> str:
         return f'<p>{_convert_inline(line.strip())}</p>'
     alt, src = m.group(1), m.group(2)
     if workspace_dir:
-        img_path = workspace_dir / src
-        if img_path.exists():
+        img_path = _safe_workspace_file(workspace_dir, src)
+        if img_path is not None and img_path.exists():
+            if img_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                return f'<p><em>Image not found: {escape(src, quote=True)}</em></p>'
             data = base64.b64encode(img_path.read_bytes()).decode('ascii')
+            alt_html = escape(alt, quote=True)
+            source_html = escape(img_path.name, quote=True)
+            mime = _image_mime(img_path)
             return (f'<div class="chart-container">'
-                    f'<img src="data:image/png;base64,{data}" alt="{alt}">'
-                    f'<p class="chart-caption">{alt}</p></div>')
-    return f'<p><em>Image not found: {src}</em></p>'
+                    f'<img data-source="{source_html}" src="data:{mime};base64,{data}" alt="{alt_html}">'
+                    f'<p class="chart-caption">{alt_html}</p></div>')
+    return f'<p><em>Image not found: {escape(src, quote=True)}</em></p>'
 
 
 def md_to_html(md_text: str, workspace_dir=None) -> str:
@@ -207,8 +238,12 @@ def md_to_html(md_text: str, workspace_dir=None) -> str:
             i += 1
             continue
 
-        # Headings: #### -> h5, ### -> h4, ## -> h3
-        if stripped.startswith('####'):
+        # Headings: ##### -> h6, #### -> h5, ### -> h4, ## -> h3
+        # Check longest match first to avoid ##### being caught by ####
+        if stripped.startswith('#####'):
+            html_parts.append(f'<h6>{_convert_inline(stripped[5:].strip())}</h6>')
+            i += 1
+        elif stripped.startswith('####'):
             html_parts.append(f'<h5>{_convert_inline(stripped[4:].strip())}</h5>')
             i += 1
         elif stripped.startswith('###'):
@@ -259,14 +294,36 @@ def md_to_html(md_text: str, workspace_dir=None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Summary metrics extraction
+# Summary metrics extraction — JSON-first with markdown regex fallback
 # ---------------------------------------------------------------------------
 
-def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
-    """Extract key metrics from step files and JSON artifacts."""
-    from pathlib import Path
-    import json
+def _read_json_safe(ws: Path, filename: str):
+    """Read a JSON file from workspace, returning None on any failure.
 
+    Handles both object and array JSON roots.
+    """
+    p = ws / filename
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, ValueError, OSError):
+        return None
+
+
+def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
+    """Extract key metrics from workspace JSON artifacts first, then regex fallback.
+
+    Priority order for each metric:
+      1. Structured JSON files (monte_carlo_results.json, pe_band_data.json, etc.)
+      2. Markdown regex parsing of step files (backward compatibility)
+
+    Supported JSON schemas (multi-workspace compatibility):
+      monte_carlo_results.json (Schema A): p50_target, current_price, rrr, kelly_*
+      monte_carlo_results.json (Schema B): target_price_percentiles.50
+      monte_carlo_results.json (Schema C): target_price.50, rrr, kelly_half_pct
+      monte_carlo_result.json  (Schema D): rrr.rrr, rrr.kelly_half (singular filename)
+    """
     ws = Path(workspace_dir)
     metrics = {}
 
@@ -274,86 +331,174 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
         p = ws / name
         return p.read_text(encoding='utf-8') if p.exists() else ''
 
-    # From step4: current price, forward PE, target price
-    s4 = _read_file('step4_quantitative_model.md')
+    def _normalize_summary_value(value):
+        if value is None:
+            return None
+        return str(value)
 
-    # Current price: prefer calculated_valuation.json, then regex
-    cv_file = ws / 'calculated_valuation.json'
-    cv = {}
-    if cv_file.exists():
-        try:
-            cv = json.loads(cv_file.read_text(encoding='utf-8'))
-            if 'price_hkd' in cv:
-                metrics['current_price'] = str(cv['price_hkd'])
-        except Exception:
-            pass
+    # ── Load all available JSON artifacts ──────────────────────────────────
+    for summary_name in ('summary_metrics.json', 'report_metrics.json'):
+        summary = _read_json_safe(ws, summary_name)
+        if isinstance(summary, dict):
+            for key, value in summary.items():
+                normalized = _normalize_summary_value(value)
+                if normalized not in (None, ''):
+                    metrics[key] = normalized
+            break
+
+    mc = _read_json_safe(ws, 'monte_carlo_results.json')
+    if mc is None:
+        mc = _read_json_safe(ws, 'monte_carlo_result.json')  # singular variant
+    cv = _read_json_safe(ws, 'calculated_valuation.json')
+    peb = _read_json_safe(ws, 'pe_band_data.json')
+    thesis = _read_json_safe(ws, 'thesis.json')
+
+    # ── current_price ──────────────────────────────────────────────────────
+    # Priority 1: monte_carlo JSON (Schema A/D have current_price at top level)
+    if 'current_price' not in metrics and mc and isinstance(mc, dict) and mc.get('current_price'):
+        metrics['current_price'] = str(mc['current_price'])
+    # Priority 2: calculated_valuation.json
+    elif 'current_price' not in metrics and cv and isinstance(cv, dict):
+        if 'price_hkd' in cv:
+            metrics['current_price'] = str(cv['price_hkd'])
+        elif isinstance(cv.get('pe_trailing'), dict) and cv['pe_trailing'].get('price'):
+            metrics['current_price'] = str(cv['pe_trailing']['price'])
+    # Priority 3: valuation_current_price.json (scalar file)
     if 'current_price' not in metrics:
-        m = re.search(r'当前价[格：:]*\s*[~～]?HKD\s*([\d.]+)', s4)
-        if not m:
-            m = re.search(r'当前股价[：:]\s*[~～]?([\d.]+)', s4)
-        if not m:
-            m = re.search(r'当前价格[：:]\s*[~～]?([\d.]+)', s4)
-        if m:
-            metrics['current_price'] = m.group(1)
-    # Forward PE: prefer calculated_valuation.json (most reliable), then regex fallback
-    if cv:
-        # Prefer T+2 forward PE, then T+1, then TTM
-        for key in ('pe_forward_t2_ngaap', 'pe_forward_t1_ngaap', 'pe_forward_t2',
-                    'pe_forward_t1', 'pe_ttm_ngaap', 'pe_ttm'):
-            if key in cv and cv[key]:
-                metrics['forward_pe'] = str(cv[key]) + 'x'
+        vcp = _read_json_safe(ws, 'valuation_current_price.json')
+        if vcp is not None and isinstance(vcp, (int, float)):
+            metrics['current_price'] = str(vcp)
+    # Fallback: regex from step4 markdown
+    if 'current_price' not in metrics:
+        s4 = _read_file('step4_quantitative_model.md')
+        for pattern in (
+            r'当前价[格：:]*\s*[~～]?HKD\s*([\d.]+)',
+            r'当前股价[：:]\s*[~～]?([\d.]+)',
+            r'当前价格[：:]\s*[~～]?([\d.]+)',
+            r'\|\s*当前价[^|]*\|\s*([\d.]+)',
+            r'当前价[^(|\n]*?([\d]+\.[\d]+)',
+        ):
+            m = re.search(pattern, s4)
+            if m:
+                metrics['current_price'] = m.group(1)
                 break
+
+    # ── target_price (P50 target) ──────────────────────────────────────────
+    if 'target_price' not in metrics and mc and isinstance(mc, dict):
+        tp = None
+        # Schema A: p50_target (top-level)
+        if 'p50_target' in mc and mc['p50_target'] is not None:
+            tp = mc['p50_target']
+        # Schema B/D: target_price_percentiles.50
+        elif isinstance(mc.get('target_price_percentiles'), dict):
+            tp = mc['target_price_percentiles'].get('50')
+        # Schema C: target_price.50
+        elif isinstance(mc.get('target_price'), dict):
+            tp = mc['target_price'].get('50')
+        if tp is not None:
+            metrics['target_price'] = f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+    # Fallback: multi-strategy regex from step4 markdown
+    if 'target_price' not in metrics:
+        s4 = _read_file('step4_quantitative_model.md')
+
+        target_keywords = ("目标价", "target price", "target_price", "p50 target", "p50目标价")
+        labeled_candidates = []
+        for line in s4.splitlines():
+            low = line.lower()
+            if "p50" not in low:
+                continue
+            if not any(kw in low for kw in target_keywords):
+                continue
+            nums = re.findall(r'(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])', line)
+            for num in nums:
+                try:
+                    if float(num) >= 1.0:
+                        labeled_candidates.append(num)
+                except ValueError:
+                    continue
+
+        # Strategy 2: Header summary "P50 目标价: 8.34"
+        header_tp = None
+        m = re.search(r'P50\s*目标价[：:]*\s*[~～]?([\d.]+)', s4)
+        if m and float(m.group(1)) >= 1.0:
+            header_tp = m.group(1)
+
+        if labeled_candidates:
+            metrics['target_price'] = labeled_candidates[-1]
+            metrics['forward_year'] = 'T+2'
+        elif header_tp:
+            metrics['target_price'] = header_tp
+        else:
+            m = re.search(
+                r'(?:P50\s*)?(?:目标价|target price)[：:\s|]*\*{0,2}([\d.]+)\*{0,2}',
+                s4,
+                re.IGNORECASE,
+            )
+            if m:
+                metrics['target_price'] = m.group(1)
+
+    # ── forward_pe ─────────────────────────────────────────────────────────
+    # Priority 1: pe_band_data.json (most accurate for "current forward PE")
+    if 'forward_pe' not in metrics and peb and isinstance(peb, dict) and 'current_forward_pe' in peb:
+        metrics['forward_pe'] = f"{peb['current_forward_pe']:.1f}x"
+    # Priority 2: calculated_valuation.json forward PE keys
+    if 'forward_pe' not in metrics and cv and isinstance(cv, dict):
+        for key in ('pe_forward', 'pe_forward_t2_ngaap', 'pe_forward_t1_ngaap',
+                    'pe_forward_t2', 'pe_forward_t1', 'pe_ttm_ngaap', 'pe_ttm'):
+            if key in cv and cv[key]:
+                v = cv[key]
+                if isinstance(v, dict):
+                    pe_value = v.get('pe', v.get('value'))
+                    if pe_value is not None:
+                        metrics['forward_pe'] = f"{pe_value:.1f}x" if isinstance(pe_value, (int, float)) else str(pe_value) + 'x'
+                elif isinstance(v, (int, float)):
+                    metrics['forward_pe'] = f"{v:.1f}x"
+                else:
+                    metrics['forward_pe'] = str(v) + 'x'
+                if 'forward_pe' in metrics:
+                    break
+    # Fallback: regex from step4 markdown
     if 'forward_pe' not in metrics:
-        m = re.search(r'PE\(Forward[^)]*\)[^(]*?([\d.]+)x', s4)
-        if not m:
-            m = re.search(r'Forward PE[^(]*?([\d.]+)x', s4)
-        if m:
-            metrics['forward_pe'] = m.group(1) + 'x'
-    # P50 target price — prefer T+2 if present (重大变化期), else T+1
-    # Strategy: find T+2 results section, extract P50 from it; fallback to last bold P50
-    t2_section = re.search(
-        r'(?:T\+2.*?蒙特卡洛结果|主估算.*?蒙特卡洛结果)(.*?)(?=\n##|\Z)',
-        s4, re.DOTALL | re.IGNORECASE
-    )
-    t2_tp = None
-    if t2_section:
-        m = re.search(r'\|\s*\*{0,2}P50\*{0,2}\s*\|\s*\*{0,2}([\d.]+)\*{0,2}', t2_section.group(1))
-        if m:
-            t2_tp = m.group(1)
+        s4 = _read_file('step4_quantitative_model.md')
+        for pattern in (
+            r'当前\s*Forward\s*PE[：:]*\s*([\d.]+)x',
+            r'P50\s*Forward\s*PE[^*]*?\*{0,2}([\d.]+)x',
+            r'Forward\s*PE\s*\|[^|]*?([\d.]+)x',
+            r'PE\(Forward[^)]*\)[^(]*?([\d.]+)x',
+            r'Forward PE[^(]*?([\d.]+)x',
+        ):
+            m = re.search(pattern, s4)
+            if m:
+                metrics['forward_pe'] = m.group(1) + 'x'
+                break
 
-    # All bold P50 rows (target price tables use **P50**)
-    all_bold_p50 = list(re.finditer(
-        r'\|\s*\*{2}P50\*{2}\s*\|\s*\*{2}([\d.]+)\*{2}', s4
-    ))
+    # ── rrr ────────────────────────────────────────────────────────────────
+    # Priority 1: monte_carlo JSON
+    if 'rrr' not in metrics and mc and isinstance(mc, dict):
+        rrr_val = None
+        # Schema A: top-level rrr
+        if isinstance(mc.get('rrr'), (int, float)):
+            rrr_val = mc['rrr']
+        # Schema D: rrr.rrr
+        elif isinstance(mc.get('rrr'), dict):
+            rrr_val = mc['rrr'].get('rrr')
+        if rrr_val is not None:
+            metrics['rrr'] = f"{rrr_val:.2f}" if isinstance(rrr_val, float) else str(rrr_val)
+    # Fallback: regex from step5 markdown
+    if 'rrr' not in metrics:
+        s5 = _read_file('step5_rrr_strategy.md')
+        for pattern in (
+            r'\*\*RRR[^*]*\*\*\s*\|?\s*\*{0,2}([\d.]+)\*{0,2}',
+            r'RRR\s*[=：:]\s*\*{0,2}([\d.]+)\*{0,2}',
+            r'RRR\s*\([^)]*\)\s*[=：:]?\s*([\d.]+)',
+            r'RRR.{0,30}?([\d]+\.[\d]+)',
+        ):
+            m = re.search(pattern, s5)
+            if m:
+                metrics['rrr'] = m.group(1)
+                break
 
-    if t2_tp:
-        metrics['target_price'] = t2_tp
-        metrics['forward_year'] = 'T+2'
-    elif all_bold_p50:
-        # Last bold P50 is likely T+2 (appears after T+1 in the document)
-        metrics['target_price'] = all_bold_p50[-1].group(1)
-    else:
-        m = re.search(r'\|\s*\*?\*?P50\*?\*?\s*\|\s*\*?\*?([\d.]+)', s4)
-        if m:
-            metrics['target_price'] = m.group(1)
-
-    # From step5: RRR — extract the actual RRR numeric value
-    s5 = _read_file('step5_rrr_strategy.md')
-    # Priority 1: explicit "**RRR** | **X.XX**" or "RRR (T+2) | X.XX" in table rows
-    m = re.search(r'\*\*RRR[^*]*\*\*\s*\|?\s*\*{0,2}([\d.]+)\*{0,2}', s5)
-    if not m:
-        # Priority 2: "RRR = X.XX" or "RRR：X.XX"
-        m = re.search(r'RRR\s*[=：:]\s*\*{0,2}([\d.]+)\*{0,2}', s5)
-    if not m:
-        # Priority 3: "RRR (T+2)" followed by number on same line (not table)
-        m = re.search(r'RRR\s*\([^)]*\)\s*[=：:]?\s*([\d.]+)', s5)
-    if not m:
-        # Priority 4: any "RRR" followed by number in close proximity (max 30 chars)
-        m = re.search(r'RRR.{0,30}?([\d]+\.[\d]+)', s5)
-    if m:
-        metrics['rrr'] = m.group(1)
-
-    # From step2: moat rating
+    # ── moat (no JSON alternative — regex only) ────────────────────────────
     s2 = _read_file('step2_competitive_moat.md')
     m = re.search(r'(Wide|Narrow|None)\s*(?:Moat)?\s*,?\s*(Widening|Stable|Narrowing)', s2, re.IGNORECASE)
     if m:
@@ -361,7 +506,8 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
     elif re.search(r'Narrow', s2):
         metrics['moat'] = 'Narrow'
 
-    # From edge_score.json
+    # ── edge_score ─────────────────────────────────────────────────────────
+    # Priority 1: edge_score.json (handles both list and dict schemas)
     ej = ws / 'edge_score.json'
     if ej.exists():
         try:
@@ -369,17 +515,28 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
             if isinstance(data, list):
                 data = data[-1]
             metrics['edge_score'] = str(data.get('composite', data.get('edge_score', '')))
-            metrics['edge_grade'] = data.get('composite_grade', '')
+            metrics['edge_grade'] = data.get('composite_grade', data.get('grade', ''))
         except Exception:
             pass
+    # Priority 2: thesis.json (fallback)
+    if 'edge_score' not in metrics and thesis and isinstance(thesis, dict):
+        t = thesis
+        if 'history' in t and isinstance(t['history'], list) and t['history']:
+            latest = t['history'][-1]
+            if 'edge_score' in latest:
+                metrics['edge_score'] = str(latest['edge_score'])
+                metrics['edge_grade'] = latest.get('edge_grade', '')
+        elif 'edge_score' in t:
+            metrics['edge_score'] = str(t['edge_score'])
+            metrics['edge_grade'] = t.get('edge_grade', '')
 
-    # From step7: decision
+    # ── decision (no JSON alternative — regex only) ────────────────────────
     s7 = _read_file('step7_research_director_review.md')
     m = re.search(r'\b(Buy|Hold|Pass)\b', s7)
     if m:
         metrics['decision'] = m.group(1)
 
-    # --- Sanity checks on extracted metrics ---
+    # ── Sanity checks on extracted metrics ─────────────────────────────────
     current_price = float(metrics.get('current_price', 0)) if metrics.get('current_price') else 0
     target_price = float(metrics.get('target_price', 0)) if metrics.get('target_price') else 0
     if current_price > 0 and target_price > 0:
@@ -393,6 +550,127 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
             )
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Auto-embed workspace images (prevents missing charts)
+# ---------------------------------------------------------------------------
+
+# Mapping of known PNG filenames to step keys for targeted embedding
+_IMAGE_STEP_MAP = {
+    'monte_carlo_distribution.png': 'step4',
+    'monte_carlo_distribution_corrected.png': 'step4',
+    'monte_carlo_distribution_v3.png': 'step4',
+    'forward_pe_band.png': 'step4',
+    'eps_distribution.png': 'step4',
+    'eps_pe_scatter.png': 'step4',
+}
+
+
+def _embed_image_as_base64(img_path: Path, alt_text: str = "") -> str:
+    """Embed a single image file as base64 into an HTML chart container."""
+    if not img_path.exists():
+        return ''
+    data = base64.b64encode(img_path.read_bytes()).decode('ascii')
+    caption = escape(alt_text or img_path.stem.replace('_', ' ').title(), quote=True)
+    source = escape(img_path.name, quote=True)
+    mime = _image_mime(img_path)
+    return (
+        f'<div class="chart-container">'
+        f'<img data-source="{source}" src="data:{mime};base64,{data}" alt="{caption}">'
+        f'<p class="chart-caption">{caption}</p></div>'
+    )
+
+
+def _auto_embed_workspace_images(ws: Path, sections_html: str) -> str:
+    """Scan workspace for PNG files not already embedded, and inject them.
+
+    1. Find all *.png in workspace (top-level only)
+    2. Check which are already embedded (filename stem or name in HTML)
+    3. For each un-embedded PNG: append to matched step or to appendix section
+    """
+    png_files = sorted(ws.glob('*.png'))
+    if not png_files:
+        return sections_html
+
+    # Detect which PNGs are already embedded by checking if filename
+    # appears in the HTML (via alt text, chart-caption, or direct reference)
+    already_embedded = set()
+    for png in png_files:
+        if png.stem in sections_html or png.name in sections_html:
+            already_embedded.add(png.name)
+
+    # Group un-embedded PNGs by target step
+    step_injections = {}   # step_key -> [(png_path, alt_text)]
+    appendix_images = []   # PNGs with no step mapping
+
+    for png in png_files:
+        if png.name in already_embedded:
+            continue
+        target_step = _IMAGE_STEP_MAP.get(png.name)
+        if target_step:
+            step_injections.setdefault(target_step, []).append(
+                (png, png.stem.replace('_', ' ').title())
+            )
+        else:
+            appendix_images.append(png)
+
+    # Inject images into existing step sections
+    for step_key, images in step_injections.items():
+        injection_html = ''
+        for img_path, alt_text in images:
+            chunk = _embed_image_as_base64(img_path, alt_text)
+            if chunk:
+                injection_html += chunk
+        if not injection_html:
+            continue
+
+        marker = f'id="{step_key}"'
+        if marker not in sections_html:
+            # Can't find the step section — send to appendix instead
+            appendix_images.extend([ip for ip, _ in images])
+            continue
+
+        # Find the section-body closing div for this step
+        pos = sections_html.index(marker)
+        body_start = sections_html.find('<div class="section-body">', pos)
+        if body_start == -1:
+            appendix_images.extend([ip for ip, _ in images])
+            continue
+
+        next_section = sections_html.find('<div id="', pos + len(marker))
+        search_end = next_section if next_section != -1 else len(sections_html)
+        body_end = sections_html.rfind('</div></div>', body_start, search_end)
+        if body_end == -1:
+            appendix_images.extend([ip for ip, _ in images])
+            continue
+
+        # Insert before the closing </div>
+        sections_html = (
+            sections_html[:body_end]
+            + injection_html
+            + sections_html[body_end:]
+        )
+
+    # Build appendix section for unmatched images
+    if appendix_images:
+        appendix_body = ''
+        for img_path in appendix_images:
+            alt = img_path.stem.replace('_', ' ').title()
+            chunk = _embed_image_as_base64(img_path, alt)
+            if chunk:
+                appendix_body += chunk
+        if appendix_body:
+            appendix_section = (
+                '<div id="charts-appendix" class="section-card">'
+                '<div class="section-header" onclick="toggleSection(this)">'
+                '<h2><i class="fas fa-chart-bar"></i> Charts & Exhibits</h2>'
+                '<span class="toggle"><i class="fas fa-chevron-down"></i></span></div>'
+                f'<div class="section-body">{appendix_body}</div></div>'
+            )
+            sections_html += appendix_section
+
+    return sections_html
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +714,8 @@ def generate_report_html(
                     company_name = m.group(1).strip()
             steps.append({**cfg, 'content': md})
         else:
-            print(f"Warning: {cfg['file']} not found, skipping")
+            if not cfg.get('optional'):
+                print(f"Warning: {cfg['file']} not found, skipping")
             steps.append({**cfg, 'content': ''})
 
     # --- Extract summary metrics ---
@@ -471,9 +750,9 @@ def generate_report_html(
             sub = f" / {metrics['edge_grade']}" if key == 'edge_score' and metrics.get('edge_grade') else unit
             summary_cards.append(
                 f'<div class="summary-card {color}">'
-                f'<div class="label">{label}</div>'
-                f'<div class="value">{val}</div>'
-                f'<div class="sub">{sub}</div></div>'
+                f'<div class="label">{escape(label, quote=True)}</div>'
+                f'<div class="value">{escape(str(val), quote=True)}</div>'
+                f'<div class="sub">{escape(str(sub), quote=True)}</div></div>'
             )
     summary_html = f'<div class="summary-grid">{"".join(summary_cards)}</div>' if summary_cards else ''
 
@@ -511,14 +790,22 @@ def generate_report_html(
             f'<div class="section-body">{body_html}</div></div>'
         )
 
+    # --- Auto-embed workspace images not referenced in markdown ---
+    sections_html = _auto_embed_workspace_images(ws, sections_html)
+
     # --- Build header ---
     display_name = company_name or ticker
-    title = f"{display_name} ({ticker}) 深度投研报告 | {date_str}"
-    price_part = f' | Current: <strong>{metrics.get("current_price", "N/A")}</strong>' if metrics.get('current_price') else ''
-    decision_part = metrics.get('decision', 'N/A')
+    display_name_html = escape(str(display_name), quote=True)
+    ticker_html = escape(str(ticker), quote=True)
+    title = escape(f"{display_name} ({ticker}) 深度投研报告 | {date_str}", quote=True)
+    price_part = (
+        f' | Current: <strong>{escape(str(metrics.get("current_price")), quote=True)}</strong>'
+        if metrics.get('current_price') else ''
+    )
+    decision_part = escape(str(metrics.get('decision', 'N/A')), quote=True)
     header_html = (
         f'<div class="sticky-header">'
-        f'<div class="logo">Invest<span>Pilot</span> | {display_name} ({ticker})</div>'
+        f'<div class="logo">Invest<span>Pilot</span> | {display_name_html} ({ticker_html})</div>'
         f'<div class="meta">Report Date: <strong>{date_str}</strong>{price_part}'
         f' | Decision: <strong>{decision_part}</strong></div></div>'
     )

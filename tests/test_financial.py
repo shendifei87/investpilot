@@ -300,6 +300,16 @@ class TestCalcPETrailing:
         assert result["eps_ttm"] > 0
         assert result["pe"] > 0
 
+    def test_tushare_descending_period_uses_newest(self):
+        income = pd.DataFrame({
+            "报告期": pd.to_datetime(["2026-12-31", "2025-12-31"]),
+            "净利润": [300.0, 100.0],
+        })
+        result = calc_pe_trailing(price=90, income=income, shares=10)
+        assert result["valid"] is True
+        assert result["eps_ttm"] == 30.0
+        assert result["pe"] == 3.0
+
     def test_no_income(self):
         result = calc_pe_trailing(price=100, income=pd.DataFrame(), shares=10)
         assert result["valid"] is False
@@ -329,6 +339,16 @@ class TestCalcPB:
         assert result["valid"] is True
         assert result["pb"] > 0
 
+    def test_tushare_descending_period_uses_newest(self):
+        balance = pd.DataFrame({
+            "报告期": pd.to_datetime(["2026-12-31", "2025-12-31"]),
+            "所有者权益合计": [500.0, 100.0],
+        })
+        result = calc_pb_from_statements(price=100, balance=balance, shares=10)
+        assert result["valid"] is True
+        assert result["book_value_per_share"] == 50.0
+        assert result["pb"] == 2.0
+
 
 class TestCalcPS:
     def test_basic_ps(self):
@@ -341,6 +361,16 @@ class TestCalcPS:
         result = calc_ps_from_statements(price=100, income=income, shares=10)
         assert result["valid"] is True
         assert result["ps"] > 0
+
+    def test_tushare_descending_period_uses_newest(self):
+        income = pd.DataFrame({
+            "报告期": pd.to_datetime(["2026-12-31", "2025-12-31"]),
+            "营业总收入": [1000.0, 200.0],
+        })
+        result = calc_ps_from_statements(price=100, income=income, shares=10)
+        assert result["valid"] is True
+        assert result["revenue_per_share"] == 100.0
+        assert result["ps"] == 1.0
 
 
 class TestCalcEvEbitda:

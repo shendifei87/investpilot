@@ -28,6 +28,7 @@ class TestDetectMarket:
         ("600519", "ASHARE"),
         ("000001.SZ", "ASHARE"),
         ("601398.SS", "ASHARE"),
+        ("600584.SH", "ASHARE"),
         ("688981", "ASHARE"),  # STAR market
     ])
     def test_market_detection(self, ticker, expected):
@@ -58,6 +59,11 @@ class TestNormalizeTicker:
         normalized, _ = normalize_ticker("688981")
         assert normalized == "688981.SS"  # yfinance convention for Shanghai
 
+    def test_a_share_sh_suffix(self):
+        normalized, market = normalize_ticker("600584.SH")
+        assert normalized == "600584.SH"
+        assert market == "ASHARE"
+
 
 class TestGetTushareCode:
     def test_a_share_shanghai(self):
@@ -78,6 +84,9 @@ class TestGetTushareCode:
     def test_ss_suffix_converted_to_sh(self):
         """yfinance .SS suffix should become Tushare .SH suffix."""
         assert get_tushare_code("601398.SS", "ASHARE") == "601398.SH"
+
+    def test_sh_suffix_preserved_for_tushare(self):
+        assert get_tushare_code("600584.SH", "ASHARE") == "600584.SH"
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +332,208 @@ class TestCmdCatalyst:
             from src.cli import cmd_catalyst
             cmd_catalyst(args)
         assert "triggered" in capsys.readouterr().out.lower()
+
+
+# ---------------------------------------------------------------------------
+# CLI cmd_consensus
+# ---------------------------------------------------------------------------
+
+class TestCmdConsensus:
+    def _make_args(self, action, **kwargs):
+        args = MagicMock()
+        args.workspace = "TEST"
+        args.action = action
+        defaults = {
+            "source": None,
+            "source_type": None,
+            "as_of": None,
+            "metrics_json": None,
+            "rating_json": None,
+            "target_price": None,
+            "confidence": None,
+            "notes": None,
+            "metric": None,
+            "period": None,
+            "consensus": None,
+            "our": None,
+            "unit": None,
+            "consensus_source": None,
+            "our_source": None,
+            "catalyst": None,
+            "lower_is_better": False,
+            "old": None,
+            "new": None,
+            "reason": None,
+            "gap": None,
+            "outcome": None,
+            "actual": None,
+            "status": None,
+        }
+        defaults.update(kwargs)
+        for k, v in defaults.items():
+            setattr(args, k, v)
+        return args
+
+    def _patch_ws(self, tmp_path):
+        return (
+            patch("src.cli.WORKSPACES_DIR", tmp_path / "workspaces"),
+            patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"),
+        )
+
+    def _init_ws(self, tmp_path):
+        (tmp_path / "workspaces" / "TEST").mkdir(parents=True, exist_ok=True)
+
+    def test_consensus_add_snapshot(self, tmp_path, capsys):
+        self._init_ws(tmp_path)
+        args = self._make_args(
+            "add-snapshot",
+            source="Broker A",
+            metrics_json='{"eps": {"2026E": {"value": 2.0, "unit": "CNY/share"}}}',
+            rating_json='{"buy": 5, "hold": 2, "sell": 0}',
+            target_price=30,
+            confidence="high",
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_consensus
+            cmd_consensus(args)
+        out = capsys.readouterr().out
+        assert "Consensus snapshot recorded" in out
+        assert (tmp_path / "workspaces" / "TEST" / "consensus_snapshot.json").exists()
+
+    def test_consensus_add_gap_and_brief(self, tmp_path, capsys):
+        self._init_ws(tmp_path)
+        with self._patch_ws(tmp_path)[1]:
+            from src.analysis.consensus_tracker import ConsensusTracker
+            tracker = ConsensusTracker("TEST")
+            tracker.record_snapshot("Broker A", {"eps": {"2026E": 2.0}})
+
+        gap_args = self._make_args(
+            "add-gap",
+            metric="eps",
+            period="2026E",
+            consensus=2.0,
+            our=2.4,
+            catalyst="Q2 earnings",
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_consensus
+            cmd_consensus(gap_args)
+        assert "Expectation gap recorded" in capsys.readouterr().out
+
+        brief_args = self._make_args("brief")
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_consensus
+            cmd_consensus(brief_args)
+        assert "Open Expectation Gaps" in capsys.readouterr().out
+
+    def test_consensus_revision(self, tmp_path, capsys):
+        self._init_ws(tmp_path)
+        args = self._make_args(
+            "revise",
+            metric="eps",
+            period="2026E",
+            old=1.0,
+            new=1.2,
+            source="Broker update",
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_consensus
+            cmd_consensus(args)
+        assert "Consensus revision recorded" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# CLI cmd_materials
+# ---------------------------------------------------------------------------
+
+class TestCmdMaterials:
+    def _make_args(self, action, **kwargs):
+        args = MagicMock()
+        args.workspace = "TEST"
+        args.action = action
+        defaults = {
+            "focus": None,
+            "file": None,
+            "doc_type": None,
+            "title": None,
+            "issuer": None,
+            "publish_date": None,
+            "period": None,
+            "source_path": None,
+            "pages": None,
+            "language": None,
+            "document": None,
+            "extract_type": None,
+            "topic": None,
+            "value": None,
+            "evidence": None,
+            "page": None,
+            "confidence": None,
+            "impact": None,
+            "tags": None,
+            "quote": None,
+            "notes": None,
+        }
+        defaults.update(kwargs)
+        for k, v in defaults.items():
+            setattr(args, k, v)
+        return args
+
+    def _patch_ws(self, tmp_path):
+        return (
+            patch("src.cli.WORKSPACES_DIR", tmp_path / "workspaces"),
+            patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"),
+        )
+
+    def _init_ws(self, tmp_path):
+        (tmp_path / "workspaces" / "TEST").mkdir(parents=True, exist_ok=True)
+
+    def test_materials_index(self, tmp_path, capsys):
+        self._init_ws(tmp_path)
+        ws = tmp_path / "workspaces" / "TEST"
+        (ws / "annual_report.pdf").write_bytes(b"%PDF fake")
+
+        args = self._make_args("index")
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(args)
+        result = json.loads(capsys.readouterr().out)
+        assert result["n_indexed"] == 1
+
+    def test_materials_add_doc_extract_and_brief(self, tmp_path, capsys):
+        self._init_ws(tmp_path)
+        add_doc_args = self._make_args(
+            "add-doc",
+            file="broker.pdf",
+            doc_type="broker_report",
+            title="Broker Initiation",
+            pages=20,
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(add_doc_args)
+        assert "Document recorded" in capsys.readouterr().out
+
+        add_ext_args = self._make_args(
+            "add-extract",
+            document="broker.pdf",
+            extract_type="broker_assumption",
+            topic="2026E EPS",
+            value="2.4",
+            evidence="Model table",
+            page="p.5",
+            tags="step3,consensus",
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(add_ext_args)
+        assert "Extraction recorded" in capsys.readouterr().out
+
+        brief_args = self._make_args("brief")
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(brief_args)
+        assert "Broker Assumption" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

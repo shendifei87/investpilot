@@ -210,7 +210,7 @@ class TestNormalizeBalanceDF:
             "total_cur_liab": [1500],
             "total_hldr_eqy_exc_min_int": [6000],
             "monetary_capital": [1200],
-            "accounts_recev": [500],
+            "accounts_receiv": [500],
             "st_borr": [800],
             "lt_borr": [1200],
         })

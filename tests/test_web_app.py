@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from web.app import Handler, get_workspace_status, _safe_path, STEP_FILES
+from web.app import Handler, get_workspace_status, _safe_path, _workspace_path, STEP_FILES
 
 
 # ─── Unit tests for helper functions ─────────────────────────────────
@@ -32,6 +32,8 @@ class TestGetWorkspaceStatus:
         assert status["status"] == "empty"
         assert status["completed"] == 0
         assert status["total"] == 7
+        assert status["triage_status"] == "pending"
+        assert status["steps"][0]["file"] == "step0_quick_triage.md"
         assert not status["has_materials"]
 
     def test_workspace_with_pdfs(self, tmp_workspace):
@@ -39,6 +41,14 @@ class TestGetWorkspaceStatus:
         status = get_workspace_status(tmp_workspace)
         assert status["status"] == "ready"
         assert status["has_materials"] is True
+        assert status["materials"] == ["annual_report.pdf"]
+
+    def test_workspace_with_uppercase_pdf_extension(self, tmp_workspace):
+        (tmp_workspace / "Annual_Report.PDF").write_bytes(b"%PDF-1.4 fake")
+        status = get_workspace_status(tmp_workspace)
+        assert status["status"] == "ready"
+        assert status["has_materials"] is True
+        assert status["materials"] == ["Annual_Report.PDF"]
 
     def test_partial_completion(self, tmp_workspace):
         (tmp_workspace / "step1_business_analysis.md").write_text("# Step 1")
@@ -55,6 +65,14 @@ class TestGetWorkspaceStatus:
         status = get_workspace_status(tmp_workspace)
         assert status["status"] == "completed"
         assert status["completed"] == 7
+
+    def test_triage_only_does_not_count_as_core_completion(self, tmp_workspace):
+        (tmp_workspace / STEP_FILES[0]).write_text("# Step 0")
+        status = get_workspace_status(tmp_workspace)
+        assert status["status"] == "triaged"
+        assert status["completed"] == 0
+        assert status["total"] == 7
+        assert status["triage_status"] == "completed"
 
     def test_pdf_and_steps(self, tmp_workspace):
         (tmp_workspace / "annual_report.pdf").write_bytes(b"%PDF-1.4 fake")
@@ -89,6 +107,18 @@ class TestSafePath:
         result = _safe_path(tmp_path, "subdir/file.txt")
         assert result is not None
         assert str(result).endswith("subdir/file.txt")
+
+
+class TestWorkspacePath:
+    def test_rejects_traversal_workspace_name(self):
+        assert _workspace_path("../AAPL") is None
+
+    def test_accepts_stock_workspace_name(self):
+        result = _workspace_path("600584.SH")
+        assert result is not None
+        ticker, path = result
+        assert ticker == "600584.SH"
+        assert path.name == "600584.SH"
 
 
 # ─── Integration tests with real HTTP server ──────────────────────────
@@ -248,6 +278,17 @@ class TestWorkspaceStatus:
 class TestStepEndpoint:
     """Tests for GET /api/research/{ticker}/step/{n}."""
 
+    def test_step0_content(self, web_server):
+        ws = web_server.workspaces_dir / "TSLA"
+        ws.mkdir()
+        (ws / "step0_quick_triage.md").write_text("# Quick Triage\n\nDecision: WATCH")
+
+        status, data = web_server.request("GET", "/api/research/TSLA/step/0")
+        assert status == 200
+        result = json.loads(data)
+        assert result["step"] == 0
+        assert "Decision: WATCH" in result["content"]
+
     def test_step_content(self, web_server):
         ws = web_server.workspaces_dir / "TSLA"
         ws.mkdir()
@@ -327,6 +368,12 @@ class TestCreateWorkspace:
         status, data = web_server.request("POST", "/api/research", body=body)
         assert status == 400
 
+    def test_rejects_path_traversal_ticker(self, web_server):
+        body = {"ticker": "../ESCAPE"}
+        status, data = web_server.request("POST", "/api/research", body=body)
+        assert status == 400
+        assert not (web_server.workspaces_dir.parent / "ESCAPE").exists()
+
 
 class TestFileUpload:
     """Tests for POST /api/research/{ticker}/upload."""
@@ -378,6 +425,14 @@ class TestFileUpload:
         except (ConnectionResetError, ConnectionRefusedError):
             # Server may reset connection when workspace not found during upload
             pass
+
+    def test_rejects_path_traversal_workspace(self, web_server):
+        body, headers = self._multipart_body("escape.pdf", b"content")
+        status, data = web_server.request(
+            "POST", "/api/research/../upload", body=body, headers=headers
+        )
+        assert status == 400
+        assert not (web_server.workspaces_dir.parent / "escape.pdf").exists()
 
 
 class TestAuthentication:

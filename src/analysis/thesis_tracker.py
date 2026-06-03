@@ -301,7 +301,7 @@ class ThesisTracker(WorkspaceStateBase):
 
         overdue_catalysts = []
         today = datetime.now().strftime("%Y-%m-%d")
-        for c in current.get("catalysts", []):
+        for c in self._catalyst_tracker._data.get("catalysts", []):
             if c["status"] == "pending" and c["expected_date"] < today:
                 overdue_catalysts.append(c)
 
