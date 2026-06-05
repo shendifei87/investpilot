@@ -1,4 +1,4 @@
-# Step 4: Quantitative Fundamental Model & Monte Carlo
+# Step 4: Quantitative Fundamental Model & Simulation
 
 You are a senior quantitative fundamental analyst converting the qualitative judgments from the first three steps into a probabilistic earnings prediction model.
 
@@ -56,7 +56,7 @@ You are a senior quantitative fundamental analyst converting the qualitative jud
 | **P50 Target Price** | **$XX** | **$XX** | **$XX** | — |
 ```
 
-The primary estimation year (T+1 or T+2/T+3) runs the Monte Carlo simulation; other years are derived from key variables.
+The primary estimation year (T+1 or T+2/T+3) runs the simulation; other years are derived from key variables.
 Each year's revenue growth must also be estimated bottom-up by segment (can be simplified to P50 single-point); never directly guess a total.
 
 ## Source Material Evidence Anchors
@@ -81,12 +81,18 @@ Every high-sensitivity variable in the assumption matrix must cite at least one 
 - self-calculated financial data artifact, or
 - `consensus_snapshot.json` expectation gap ID.
 
+Evidence references must be written into the structured assumption artifact as `evidence_ids`.
+Allowed references:
+- `EXT...` IDs from `material_extracts.json`
+- `EG...` / `CS...` IDs from `consensus_snapshot.json`
+- explicit raw-data aliases with prefixes: `DATA:`, `CALC:`, `WEB:`, `FILING:`, `MODEL:`
+
 If a variable relies on a broker report assumption, state whether it is being used as:
 1. market consensus baseline,
 2. evidence anchor,
 3. rejected/contrarian evidence.
 
-Do not copy broker target prices or PE/PB multiples directly into the Monte Carlo assumptions.
+Do not copy broker target prices or PE/PB multiples directly into the simulation assumptions.
 
 ## Six-Layer Process
 
@@ -265,7 +271,7 @@ Each peer's PE must state:
 - Default to T+1 year Forward PE/PB
 - Use T+2 or T+3 during major change periods
 - Target Price = Forward EPS × PE distribution
-- **PE Band must use the same Forward year as Monte Carlo**
+- **PE Band must use the same Forward year as the simulation**
 
 ---
 
@@ -297,20 +303,139 @@ Highlight:
 - Variables with **low confidence**
 - Variables with **high EPS sensitivity and wide distribution**
 
-**Wait for user confirmation or adjustment before running Monte Carlo simulation.**
+**Wait for user confirmation or adjustment before running the simulation.**
 
-**⚠️ Consistency constraint**: Monte Carlo assumptions must be **identical** to the user-reviewed matrix — no post-review premium additions allowed.
+**⚠️ Consistency constraint**: Simulation assumptions must be **identical** to the user-reviewed matrix — no post-review premium additions allowed.
+
+---
+
+### Structured Step 4 Artifact (Hard Requirement)
+
+Before validation or simulation, save the assumption model as:
+
+`workspaces/{workspace_dir}/step4_structured_assumptions.json`
+
+Use:
+
+```python
+from src.analysis.step4_schema import save_structured_assumptions
+
+save_structured_assumptions(workspace_dir, {
+    "segment_revenues": [
+        {
+            "name": "Segment A",
+            "base_revenue": ...,
+            "p10_growth": ...,
+            "p30_growth": ...,
+            "p50_growth": ...,
+            "p70_growth": ...,
+            "p90_growth": ...,
+            "p50_revenue": ...,
+        },
+    ],
+    "growth_drivers": [
+        {
+            "segment": "Segment A",
+            "drivers": [
+                {"name": "volume", "contribution_pct": ..., "evidence_ids": ["EXT...", "DATA:orders"]},
+                {"name": "ASP", "contribution_pct": ..., "evidence_ids": ["EXT...", "WEB:pricing"]},
+            ],
+        },
+    ],
+    "bridge_analysis": {"base_total": ..., "delta": ..., "p50_total": ...},
+    "q1_constraint": {"feasibility": "...", ...},
+    "margin_derivation": {"method": "cost_buildup", "cost_items": [...], "p50_margin": ...},
+    "assumption_matrix": [
+        {
+            "variable": "rev_growth",
+            "segment": "total",
+            "year": "T+1",
+            "p10": ..., "p30": ..., "p50": ..., "p70": ..., "p90": ...,
+            "sensitivity": "high",
+            "confidence": "medium",
+            "evidence_ids": ["EXT...", "EG...", "DATA:..."],
+        },
+    ],
+    "financial_model_inputs": {
+        "shares_outstanding": ...,
+        "current_price": ...,
+        "cash": ...,
+        "debt": ...,
+        "equity": ...,
+        "nwc_ratio": ...,
+        "ppe_ratio": ...,
+        "capex_ratio": ...,
+        "da_ratio": ...,
+    },
+    "contrarian_checks": [
+        {"variable": "rev_growth", "p50": ..., "p10": ..., "evidence_to_flip": "..."},
+    ],
+    "historical_valuation": {...},
+    "peer_comparison": {...},
+    "valuation_source": {"pe_calculated": True, "calc_inputs_disclosed": True},
+    "reverse_dcf": {...},
+    "dcf_cross_validation": {...},
+    "assumption_consistency": {
+        "post_review_changes": False,
+        "pe_moat_aligned": True,
+        "revenue_segment_aligned": True,
+    },
+})
+```
+
+Hard validator requirements:
+- Every non-total segment must have a matching `growth_drivers` row.
+- Every segment must have at least 2 drivers.
+- Every driver must have `contribution_pct` and `evidence_ids`.
+- Driver contribution sum must reconcile to segment `p50_growth` within 5 percentage points.
+- Every high-sensitivity variable in `assumption_matrix` must have a contrarian check.
+- `_reviewed_assumptions.json` must cover every variable in `assumption_matrix`.
+
+### Formula-Linked Forecast Model (Mandatory)
+
+After Step 4 validation passes, generate the formula-linked financial model artifacts:
+
+```bash
+python -m src.cli model {workspace_dir} --ticker {ticker}
+```
+
+The model command automatically runs Step 4 validation first. If validation fails, model generation is blocked and no forecast model should be produced.
+
+Outputs:
+- `forecast_model.json`: auditable JSON source of the three-year model
+- `forecast_model.html`: standalone HTML model supplement
+
+The final HTML report will also embed this model automatically. The model is built from the Step 4 structured assumptions and must include:
+- segment revenue build
+- income statement forecast
+- cash-flow forecast
+- simplified balance-sheet roll-forward
+- valuation bridge
+- model checks
+
+If a full three-statement schedule cannot be completed because balance-sheet inputs are missing, keep the model explicit and let checks show `WARN`; do not hide the gap with an unlabeled plug.
 
 ---
 
 ### 🚫 Pre-Flight Validation (Hard Block)
 
-**After user confirms assumptions, before running Monte Carlo, validation must be executed:**
+**After user confirms assumptions, before running the simulation, validation must be executed:**
 
 ```python
 from src.analysis.step4_validate import validate_step4
 result = validate_step4(f"workspaces/{workspace_dir}/step4_quantitative_model.md")
 ```
+
+Or run:
+
+```bash
+python -m src.cli validate-step4 {workspace_dir} --max-attempts 2
+```
+
+Retry guard:
+- A failed validation increments `step4_guard_state.json`.
+- After 2 failed validation attempts, the harness writes `step4_blockers.md`.
+- When `step4_blockers.md` exists, stop automatic repair attempts. Do not run the simulation or generate the forecast model until the listed blockers are resolved.
 
 **Step 4 New Validations (14 checks, including valuation metric calculation + Apple-to-Apple)**:
 
@@ -336,13 +461,13 @@ assert result["passed"], f"Apple-to-apple validation failed: {result['summary']}
 ```
 
 **Handling rules**:
-- **`result["passed"] == True`**: Monte Carlo may proceed
-- **`result["passed"] == False`**: **Monte Carlo is prohibited**. Fix `fix_required` items and re-validate
+- **`result["passed"] == True`**: Simulation may proceed
+- **`result["passed"] == False`**: **Simulation is prohibited**. Fix `fix_required` items and re-validate
 - Write validation results to step4 file
 
 ---
 
-### Monte Carlo Simulation
+### Simulation
 
 **After Pre-Flight validation passes**, run simulation and output:
 
@@ -384,7 +509,7 @@ Cross-validation with Step 3 expectation gap: [positive/negative/no gap]
 
 | Method | P50 / Intrinsic Value | vs Current Price |
 |:-------|:-------------|:---------|
-| Monte Carlo (relative valuation) | $XX | +X% |
+| Simulation (relative valuation) | $XX | +X% |
 | DCF (absolute valuation) | $XX | +X% |
 
 Deviation >30% requires explanation.
@@ -396,9 +521,16 @@ from src.analysis.valuation import forward_pe_band, load_price_series
 from src.report.generator import generate_pe_band_chart
 
 prices = load_price_series(ws)
-pe_band = forward_pe_band(prices, forward_eps=p50_eps, window_weeks=260)
+pe_band = forward_pe_band(
+    prices,
+    forward_eps=p50_eps,
+    forward_eps_series=point_in_time_forward_eps_series_if_available,
+    window_weeks=260,
+)
 chart_path = generate_pe_band_chart(pe_band, title=f"{ticker} 1Y Forward PE Band", save_path=ws / "forward_pe_band.png")
 ```
+
+If `forward_eps_series` is unavailable, the chart is a constant-EPS price band proxy, not a true historical Forward PE percentile. State this explicitly in Step 4.
 
 Output:
 ```markdown

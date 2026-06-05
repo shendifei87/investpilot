@@ -762,6 +762,33 @@ def generate_report_html(
         toc_items.append(
             f'<li><a href="#{cfg["key"]}"><i class="{cfg["icon"]}"></i> {cfg["title"]}</a></li>'
         )
+    model_html_body = ""
+    model_link_html = ""
+    if (ws / "step4_structured_assumptions.json").exists():
+        try:
+            from src.analysis.step4_validate import validate_step4
+            validation = validate_step4(ws / "step4_quantitative_model.md")
+            if not validation.get("passed"):
+                raise RuntimeError(
+                    "Step 4 validation failed; forecast model generation blocked. "
+                    "Run python -m src.cli validate-step4 WORKSPACE."
+                )
+            from src.analysis.financial_model import generate_financial_model_artifacts
+            model_artifacts = generate_financial_model_artifacts(ws, ticker=ticker)
+            model_html_body = model_artifacts.get("html_body", "")
+            model_path = Path(model_artifacts.get("html_path", ""))
+            if model_path:
+                model_link_html = (
+                    f'<p><strong>Standalone model:</strong> '
+                    f'{escape(model_path.name, quote=True)}</p>'
+                )
+        except Exception as e:
+            model_html_body = (
+                '<p><em>Forecast model not generated: '
+                f'{escape(str(e), quote=True)}</em></p>'
+            )
+    if model_html_body:
+        toc_items.append('<li><a href="#forecast-model"><i class="fas fa-table"></i> Forecast Model</a></li>')
     toc_html = f'<div class="toc"><h2>Table of Contents</h2><ul class="toc-list">{"".join(toc_items)}</ul></div>'
 
     # --- Build sidebar ---
@@ -770,6 +797,8 @@ def generate_report_html(
         sidebar_items.append(
             f'<a href="#{cfg["key"]}"><i class="{cfg["icon"]}"></i> {cfg["title"]}</a>'
         )
+    if model_html_body:
+        sidebar_items.append('<a href="#forecast-model"><i class="fas fa-table"></i> Forecast Model</a>')
     sidebar_html = (
         '<div class="sidebar"><div class="nav-section">'
         f'<h3>Navigation</h3>{"".join(sidebar_items)}'
@@ -792,6 +821,15 @@ def generate_report_html(
 
     # --- Auto-embed workspace images not referenced in markdown ---
     sections_html = _auto_embed_workspace_images(ws, sections_html)
+
+    if model_html_body:
+        sections_html += (
+            '<div id="forecast-model" class="section-card">'
+            '<div class="section-header" onclick="toggleSection(this)">'
+            '<h2><i class="fas fa-table"></i> Forecast Model</h2>'
+            '<span class="toggle"><i class="fas fa-chevron-down"></i></span></div>'
+            f'<div class="section-body">{model_link_html}{model_html_body}</div></div>'
+        )
 
     # --- Build header ---
     display_name = company_name or ticker

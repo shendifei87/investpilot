@@ -91,6 +91,21 @@ class TestFetchAndCache:
             result = cache_mod.fetch_and_cache("no_meta", fetch, ttl_hours=24)
             assert result["close"].iloc[0] == 60
 
+    def test_handles_corrupt_meta_as_cache_miss(self, tmp_path):
+        import src.data.cache as cache_mod
+
+        with patch.object(cache_mod, "CACHE_DIR", tmp_path):
+            pd.DataFrame({"close": [50]}).to_csv(tmp_path / "bad_meta.csv")
+            (tmp_path / "bad_meta.meta.json").write_text("{bad json", encoding="utf-8")
+
+            result = cache_mod.fetch_and_cache(
+                "bad_meta",
+                lambda: pd.DataFrame({"close": [70]}),
+                ttl_hours=24,
+            )
+
+            assert result["close"].iloc[0] == 70
+
 
 class TestInvalidateCache:
     """Tests for invalidate_cache()."""

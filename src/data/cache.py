@@ -23,16 +23,19 @@ def fetch_and_cache(
     mp = _meta_path(cache_key)
 
     if cp.exists() and mp.exists():
-        meta = json.loads(mp.read_text())
-        age_hours = (time.time() - meta["timestamp"]) / 3600
-        if age_hours < ttl_hours:
-            return pd.read_csv(cp, index_col=0)
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+            age_hours = (time.time() - meta["timestamp"]) / 3600
+            if age_hours < ttl_hours:
+                return pd.read_csv(cp, index_col=0)
+        except (json.JSONDecodeError, KeyError, OSError, ValueError):
+            pass
 
     df = fetch_fn()
     if df is None:
         raise ValueError(f"fetch_fn for '{cache_key}' returned None")
     df.to_csv(cp)
-    mp.write_text(json.dumps({"timestamp": time.time(), "key": cache_key}))
+    mp.write_text(json.dumps({"timestamp": time.time(), "key": cache_key}), encoding="utf-8")
     return df
 
 

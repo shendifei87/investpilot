@@ -27,6 +27,17 @@ DOCUMENT_TYPES = {
     "other",
 }
 
+PDF_READ_FAILURE_STATUSES = {"failed", "error", "unreadable", "encoding_error", "parse_error"}
+PDF_READ_SUCCESS_STATUSES = {"success", "partial_success"}
+DISALLOWED_REPORT_SOURCE_KINDS = {
+    "news",
+    "article",
+    "media",
+    "summary",
+    "press_release",
+    "broker_summary",
+}
+
 EXTRACTION_TYPES = {
     "business_overview",
     "management_guidance",
@@ -80,6 +91,31 @@ def _short(text: Any, max_len: int = 90) -> str:
     return s if len(s) <= max_len else s[: max_len - 1] + "…"
 
 
+def _is_mda_extraction(ext: dict) -> bool:
+    """Return True only when an extraction explicitly points to MD&A/management discussion."""
+    fields = [
+        ext.get("topic", ""),
+        ext.get("evidence", ""),
+        ext.get("page", ""),
+        ext.get("notes", ""),
+        " ".join(str(t) for t in ext.get("tags", [])),
+    ]
+    haystack = " ".join(str(f).lower() for f in fields)
+    markers = [
+        "mda",
+        "md&a",
+        "management discussion",
+        "management's discussion",
+        "management discussion and analysis",
+        "管理层讨论",
+        "管理层讨论与分析",
+        "经营情况讨论",
+        "经营情况讨论与分析",
+        "董事会报告",
+    ]
+    return any(marker in haystack for marker in markers)
+
+
 class MaterialTracker(WorkspaceStateBase):
     """Manages structured source material extraction in a workspace."""
 
@@ -109,6 +145,9 @@ class MaterialTracker(WorkspaceStateBase):
         pages: int | None = None,
         language: str = "",
         notes: str = "",
+        source_url: str = "",
+        source_kind: str = "",
+        is_complete_report: bool | None = None,
     ) -> dict:
         """Add or update a source document record."""
         filename = Path(filename).name
@@ -127,6 +166,13 @@ class MaterialTracker(WorkspaceStateBase):
                 "pages": pages if pages is not None else existing.get("pages"),
                 "language": language or existing.get("language", ""),
                 "notes": notes or existing.get("notes", ""),
+                "source_url": source_url or existing.get("source_url", ""),
+                "source_kind": source_kind or existing.get("source_kind", ""),
+                "is_complete_report": (
+                    is_complete_report
+                    if is_complete_report is not None
+                    else existing.get("is_complete_report")
+                ),
                 "updated_at": _today(),
             })
             self._save()
@@ -144,10 +190,103 @@ class MaterialTracker(WorkspaceStateBase):
             "pages": pages,
             "language": language,
             "notes": notes,
+            "source_url": source_url,
+            "source_kind": source_kind,
+            "is_complete_report": is_complete_report,
+            "read_attempts": [],
+            "read_status": "",
+            "fallback_required": False,
+            "fallback_resolved": False,
             "created_at": _today(),
             "updated_at": _today(),
         }
         self._data["documents"].append(doc)
+        self._save()
+        return doc
+
+    def record_read_attempt(
+        self,
+        document_ref: str,
+        status: str,
+        method: str = "pdf_text_extract",
+        error: str = "",
+        max_attempts: int = 2,
+        notes: str = "",
+    ) -> dict:
+        """Record one bounded PDF-reading attempt.
+
+        After ``max_attempts`` failed attempts, the document is marked as
+        requiring a complete-report web fallback. Further failed attempts are
+        rejected so the harness cannot burn tokens on the same unreadable PDF.
+        """
+        doc = self._find_document(document_ref)
+        if not doc:
+            raise ValueError(f"Document '{document_ref}' not found.")
+
+        normalized_status = (status or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized_status in PDF_READ_FAILURE_STATUSES and doc.get("fallback_required"):
+            raise ValueError(
+                f"PDF read attempt limit reached for '{doc['filename']}'. "
+                "Use an official complete annual/interim report web fallback instead."
+            )
+
+        attempts = doc.setdefault("read_attempts", [])
+        attempt = {
+            "status": normalized_status,
+            "method": method or "pdf_text_extract",
+            "error": error,
+            "notes": notes,
+            "attempted_at": _today(),
+        }
+        attempts.append(attempt)
+
+        failures = sum(1 for a in attempts if a.get("status") in PDF_READ_FAILURE_STATUSES)
+        if normalized_status in PDF_READ_SUCCESS_STATUSES:
+            doc["read_status"] = normalized_status
+            doc["fallback_required"] = False
+            doc["read_error"] = ""
+        elif normalized_status in PDF_READ_FAILURE_STATUSES:
+            doc["read_status"] = "blocked_pdf_read" if failures >= max_attempts else normalized_status
+            doc["read_error"] = error
+            if failures >= max_attempts:
+                doc["fallback_required"] = True
+        else:
+            doc["read_status"] = normalized_status or "unknown"
+
+        doc["updated_at"] = _today()
+        self._save()
+        return doc
+
+    def record_web_fallback(
+        self,
+        document_ref: str,
+        url: str,
+        source_kind: str,
+        is_complete_report: bool,
+        notes: str = "",
+    ) -> dict:
+        """Record an official complete-report fallback for an unreadable PDF."""
+        doc = self._find_document(document_ref)
+        if not doc:
+            raise ValueError(f"Document '{document_ref}' not found.")
+        normalized_kind = (source_kind or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized_kind in DISALLOWED_REPORT_SOURCE_KINDS:
+            raise ValueError("Fallback source must be a complete annual/interim report, not news or a summary.")
+        if not is_complete_report:
+            raise ValueError("Fallback source must be the complete annual/interim report.")
+        if not url:
+            raise ValueError("Fallback URL is required.")
+
+        doc.update({
+            "source_url": url,
+            "source_kind": normalized_kind or "official_complete_report",
+            "is_complete_report": True,
+            "fallback_required": False,
+            "fallback_resolved": True,
+            "read_status": "web_fallback_complete_report",
+            "notes": notes or doc.get("notes", ""),
+            "updated_at": _today(),
+        })
         self._save()
         return doc
 
@@ -288,6 +427,89 @@ class MaterialTracker(WorkspaceStateBase):
             "by_document_type": by_doc_type,
             "by_extraction_type": by_extraction_type,
             "unextracted_documents": unextracted,
+        }
+
+    def validate_coverage(
+        self,
+        required_extraction_types: list[str] | None = None,
+        require_annual_mda: bool = True,
+        require_broker_assumptions: bool = False,
+    ) -> dict:
+        """Validate that source-material extraction is strong enough to proceed.
+
+        This is intentionally stricter than ``coverage_summary``. It prevents a
+        research step from merely indexing PDFs while leaving the actual evidence
+        chain blank.
+        """
+        raw_required = required_extraction_types if required_extraction_types is not None else [
+            "business_overview",
+            "management_guidance",
+            "segment_forecast",
+            "financial_fact",
+            "risk_factor",
+        ]
+        required = [
+            normalize_extraction_type(t)
+            for t in raw_required
+        ]
+        docs = self._data.get("documents", [])
+        exts = self._data.get("extractions", [])
+        by_type = {}
+        for ext in exts:
+            by_type.setdefault(ext.get("extraction_type"), []).append(ext)
+
+        fix_required = []
+        warnings = []
+
+        missing = [t for t in required if not by_type.get(t)]
+        if missing:
+            fix_required.append(f"Missing required extraction types: {missing}")
+
+        annual_docs = [d for d in docs if d.get("doc_type") in {"annual_report", "interim_report"}]
+        if require_annual_mda and annual_docs:
+            for doc in annual_docs:
+                source_kind = str(doc.get("source_kind", "")).lower()
+                if source_kind in DISALLOWED_REPORT_SOURCE_KINDS:
+                    fix_required.append(
+                        f"{doc.get('filename')} is indexed as an annual/interim report but source_kind={source_kind}; use the complete report, not news/summary"
+                    )
+                if doc.get("source_url") and doc.get("is_complete_report") is not True:
+                    fix_required.append(
+                        f"{doc.get('filename')} has a web source but is not marked as a complete annual/interim report"
+                    )
+                if doc.get("fallback_required"):
+                    fix_required.append(
+                        f"{doc.get('filename')} PDF read failed; record an official complete-report web fallback before continuing"
+                    )
+                if doc.get("fallback_resolved") and not doc.get("is_complete_report"):
+                    fix_required.append(
+                        f"{doc.get('filename')} fallback is not marked as a complete annual/interim report"
+                    )
+
+            mda_exts = [
+                e for e in exts
+                if e.get("document_type") in {"annual_report", "interim_report"}
+                and _is_mda_extraction(e)
+            ]
+            if not mda_exts:
+                fix_required.append("Annual/interim report indexed but no explicit MD&A/management-discussion extraction recorded")
+        elif require_annual_mda and not annual_docs:
+            fix_required.append("No annual/interim report source indexed; add a workspace PDF or official complete annual/interim report URL and read MD&A")
+
+        broker_docs = [d for d in docs if d.get("doc_type") == "broker_report"]
+        if require_broker_assumptions and broker_docs and not by_type.get("broker_assumption"):
+            fix_required.append("Broker reports indexed but no broker_assumption extraction recorded")
+
+        unextracted = [d.get("filename") for d in self.coverage_summary()["unextracted_documents"]]
+        if unextracted:
+            warnings.append(f"Documents indexed with no extraction: {unextracted}")
+
+        return {
+            "passed": not fix_required,
+            "fix_required": fix_required,
+            "warnings": warnings,
+            "coverage_summary": self.coverage_summary(),
+            "summary": "Material coverage sufficient" if not fix_required else f"{len(fix_required)} material coverage issue(s)",
         }
 
     def snapshot(self) -> dict:

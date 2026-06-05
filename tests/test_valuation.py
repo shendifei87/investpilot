@@ -134,6 +134,8 @@ class TestForwardPEBand:
         assert "bands" in result
         assert result["current_pe"] > 0
         assert result["forward_eps"] == 5.0
+        assert result["method"] == "constant_forward_eps_proxy"
+        assert result["is_true_historical_forward_pe"] is False
         for key in ["p10", "p25", "p50", "p75", "p90"]:
             assert key in result["bands"]
 
@@ -155,6 +157,26 @@ class TestForwardPEBand:
         result = forward_pe_band(prices, forward_eps=5.0)
         bands = result["bands"]
         assert bands["p10"] < bands["p25"] < bands["p50"] < bands["p75"] < bands["p90"]
+
+    def test_uses_point_in_time_forward_eps_series(self):
+        dates = pd.date_range("2020-01-01", periods=500, freq="D")
+        prices = pd.Series(np.linspace(80, 120, 500), index=dates)
+        eps = pd.Series(np.linspace(4, 6, 500), index=dates)
+        result = forward_pe_band(prices, forward_eps=5.0, forward_eps_series=eps)
+        assert result["method"] == "point_in_time_forward_eps"
+        assert result["is_true_historical_forward_pe"] is True
+        assert "eps_series" in result
+
+    def test_point_in_time_eps_does_not_backfill_future_estimates(self):
+        dates = pd.date_range("2020-01-01", periods=900, freq="D")
+        prices = pd.Series(np.linspace(80, 120, 900), index=dates)
+        eps_dates = pd.date_range("2020-07-01", periods=650, freq="D")
+        eps = pd.Series(np.linspace(4, 6, 650), index=eps_dates)
+
+        result = forward_pe_band(prices, forward_eps=5.0, forward_eps_series=eps)
+
+        assert result["method"] == "point_in_time_forward_eps"
+        assert result["eps_series"].index.min() >= pd.Timestamp("2020-07-01")
 
 
 class TestLoadPriceSeries:

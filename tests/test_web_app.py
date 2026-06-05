@@ -323,6 +323,17 @@ class TestImageEndpoint:
         assert isinstance(data, bytes)  # Binary PNG data
         assert data[:4] == b"\x89PNG"
 
+    def test_serve_uppercase_png_extension(self, web_server):
+        ws = web_server.workspaces_dir / "NVDA"
+        ws.mkdir()
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+        (ws / "chart.PNG").write_bytes(png_header)
+
+        status, data = web_server.request("GET", "/api/research/NVDA/image/chart.PNG")
+
+        assert status == 200
+        assert data[:4] == b"\x89PNG"
+
     def test_path_traversal_blocked(self, web_server):
         ws = web_server.workspaces_dir / "NVDA"
         ws.mkdir()
@@ -455,6 +466,48 @@ class TestAuthentication:
             "GET", "/api/workspaces", headers=headers
         )
         assert status == 401
+
+
+class TestErrorHandling:
+    """Tests for malformed request handling (400 errors)."""
+
+    def test_malformed_content_length_returns_400(self, web_server):
+        """Non-numeric Content-Length header should return 400."""
+        conn = HTTPConnection("localhost", web_server.port, timeout=5)
+        conn.request(
+            "POST", "/api/research",
+            body=b'{"ticker": "AAPL"}',
+            headers={"Content-Type": "application/json", "Content-Length": "abc"},
+        )
+        resp = conn.getresponse()
+        raw = resp.read()
+        conn.close()
+        assert resp.status == 400
+        result = json.loads(raw)
+        assert "Invalid Content-Length" in result.get("error", "")
+
+    def test_malformed_json_body_returns_400(self, web_server):
+        """Invalid JSON body should return 400."""
+        status, data = web_server.request(
+            "POST", "/api/research",
+            body=b"this is not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert status == 400
+        result = json.loads(data)
+        assert "Invalid JSON" in result.get("error", "")
+
+    def test_serve_uppercase_html_extension(self, web_server):
+        """Report endpoint should serve .HTML files (case-insensitive)."""
+        ws = web_server.workspaces_dir / "AAPL"
+        ws.mkdir()
+        (ws / "AAPL_report_20260101.HTML").write_text("<html><body>Report</body></html>")
+
+        status, data = web_server.request(
+            "GET", "/api/research/AAPL/report/AAPL_report_20260101.HTML"
+        )
+        assert status == 200
+        assert "Report" in data
 
 
 class TestNotFound:

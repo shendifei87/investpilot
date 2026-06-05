@@ -13,6 +13,7 @@ import pytest
 
 from src.analysis.step4_validate import (
     validate_step4,
+    validate_step4_with_guard,
     _load_structured_json,
     _validate_structured,
 )
@@ -36,8 +37,16 @@ def _full_valid_structured() -> dict:
     """Return a complete valid structured JSON that should pass all checks."""
     return {
         "segment_revenues": [
-            {"name": "seg1", "base_revenue": 100, "p50_growth": 0.15, "p50_revenue": 115},
-            {"name": "seg2", "base_revenue": 200, "p50_growth": 0.10, "p50_revenue": 220},
+            {
+                "name": "seg1", "base_revenue": 100,
+                "p10_growth": 0.05, "p30_growth": 0.10, "p50_growth": 0.15,
+                "p70_growth": 0.18, "p90_growth": 0.22, "p50_revenue": 115,
+            },
+            {
+                "name": "seg2", "base_revenue": 200,
+                "p10_growth": 0.02, "p30_growth": 0.06, "p50_growth": 0.10,
+                "p70_growth": 0.13, "p90_growth": 0.16, "p50_revenue": 220,
+            },
         ],
         "bridge_analysis": {
             "base_total": 300,
@@ -61,8 +70,37 @@ def _full_valid_structured() -> dict:
             "p50_margin": 0.45,
         },
         "growth_drivers": [
-            {"segment": "seg1", "drivers": [{"name": "volume", "contribution_pct": 0.08}]},
-            {"segment": "seg2", "drivers": [{"name": "ASP", "contribution_pct": 0.10}]},
+            {
+                "segment": "seg1",
+                "drivers": [
+                    {"name": "volume", "contribution_pct": 0.10, "evidence_ids": ["DATA:orders"]},
+                    {"name": "ASP", "contribution_pct": 0.05, "evidence_ids": ["DATA:pricing"]},
+                ],
+            },
+            {
+                "segment": "seg2",
+                "drivers": [
+                    {"name": "market_size", "contribution_pct": 0.06, "evidence_ids": ["WEB:industry"]},
+                    {"name": "share_gain", "contribution_pct": 0.04, "evidence_ids": ["DATA:customers"]},
+                ],
+            },
+        ],
+        "assumption_matrix": [
+            {
+                "variable": "rev_growth", "segment": "total", "year": "T+1",
+                "p10": 0.03, "p30": 0.07, "p50": 0.1167, "p70": 0.15, "p90": 0.19,
+                "sensitivity": "high", "confidence": "medium", "evidence_ids": ["DATA:orders"],
+            },
+            {
+                "variable": "gross_margin", "segment": "total", "year": "T+1",
+                "p10": 0.35, "p30": 0.40, "p50": 0.45, "p70": 0.48, "p90": 0.52,
+                "sensitivity": "high", "confidence": "medium", "evidence_ids": ["DATA:costs"],
+            },
+            {
+                "variable": "pe", "segment": "company", "year": "T+1",
+                "p10": 15, "p30": 18, "p50": 22, "p70": 27, "p90": 35,
+                "sensitivity": "high", "confidence": "medium", "evidence_ids": ["CALC:calculated_valuation.json"],
+            },
         ],
         "historical_valuation": {
             "pe_min": 15,
@@ -92,8 +130,9 @@ def _full_valid_structured() -> dict:
         },
         "contrarian_checks": [
             {"variable": "revenue", "p50": 0.15, "p10": 0.05, "evidence_to_flip": "Q1 miss"},
-            {"variable": "margin", "p50": 0.45, "p10": 0.35, "evidence_to_flip": "Price war"},
-            {"variable": "PE", "p50": 22, "p10": 15, "evidence_to_flip": "Sector de-rating"},
+            {"variable": "rev_growth", "p50": 0.1167, "p10": 0.03, "evidence_to_flip": "Q1 miss"},
+            {"variable": "gross_margin", "p50": 0.45, "p10": 0.35, "evidence_to_flip": "Price war"},
+            {"variable": "pe", "p50": 22, "p10": 15, "evidence_to_flip": "Sector de-rating"},
         ],
         "assumption_consistency": {
             "post_review_changes": False,
@@ -139,6 +178,15 @@ class TestStructuredValidation:
             "pb": {"pb": 3.0, "valid": True},
             "ps": {"ps": 5.0, "valid": True},
         }), encoding="utf-8")
+        reviewed = tmp_path / "_reviewed_assumptions.json"
+        reviewed.write_text(json.dumps({
+            "reviewed_at": "2026-01-01",
+            "assumptions": {
+                "rev_growth": {"p10": 0.03, "p50": 0.1167, "p90": 0.19},
+                "gross_margin": {"p10": 0.35, "p50": 0.45, "p90": 0.52},
+                "pe": {"p10": 15, "p50": 22, "p90": 35},
+            },
+        }), encoding="utf-8")
         result = validate_step4(md_path)
         assert result["validation_mode"] == "structured_json"
         assert result["passed"] is True, f"Unexpected failures: {result['fix_required'][:3]}"
@@ -163,6 +211,38 @@ class TestStructuredValidation:
         result = validate_step4(md_path)
         seg = [c for c in result["checks"] if c["check"] == "segment_sum"]
         assert seg[0]["status"] == "FAIL"
+
+    def test_segment_sum_ignores_total_row(self, tmp_path):
+        structured = _full_valid_structured()
+        structured["segment_revenues"].append({
+            "name": "Total",
+            "base_revenue": 300,
+            "p50_growth": 0.1167,
+            "p50_revenue": 335,
+        })
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+
+        result = validate_step4(md_path)
+
+        seg = [c for c in result["checks"] if c["check"] == "segment_sum"]
+        assert seg[0]["status"] == "PASS"
+
+    def test_numeric_strings_are_coerced_for_structured_arithmetic(self, tmp_path):
+        structured = _full_valid_structured()
+        structured["bridge_analysis"]["base_total"] = "300"
+        structured["bridge_analysis"]["delta"] = "35"
+        structured["bridge_analysis"]["p50_total"] = "335"
+        structured["dcf_cross_validation"]["deviation_pct"] = "5%"
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+
+        result = validate_step4(md_path)
+
+        bridge = [c for c in result["checks"] if c["check"] == "bridge_arithmetic"]
+        dcf = [c for c in result["checks"] if c["check"] == "dcf_cross_validation"]
+        assert bridge[0]["status"] == "PASS"
+        assert dcf[0]["status"] == "PASS"
 
     def test_q1_unreasonable(self, tmp_path):
         structured = _full_valid_structured()
@@ -229,6 +309,35 @@ class TestStructuredValidation:
         apple = [c for c in result["checks"] if c["check"] == "apple_to_apple_valuation"]
         assert apple[0]["status"] == "FAIL"
 
+    def test_driver_evidence_missing_fails(self, tmp_path):
+        structured = _full_valid_structured()
+        structured["growth_drivers"][0]["drivers"][0]["evidence_ids"] = []
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+        result = validate_step4(md_path)
+        evidence = [c for c in result["checks"] if c["check"] == "driver_evidence_links"]
+        assert evidence[0]["status"] == "FAIL"
+
+    def test_high_sensitivity_missing_contrarian_fails(self, tmp_path):
+        structured = _full_valid_structured()
+        structured["contrarian_checks"] = [
+            c for c in structured["contrarian_checks"]
+            if c.get("variable") != "gross_margin"
+        ]
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+        result = validate_step4(md_path)
+        coverage = [c for c in result["checks"] if c["check"] == "high_sensitivity_contrarian_coverage"]
+        assert coverage[0]["status"] == "FAIL"
+
+    def test_reviewed_lock_missing_fails(self, tmp_path):
+        structured = _full_valid_structured()
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+        result = validate_step4(md_path)
+        lock = [c for c in result["checks"] if c["check"] == "reviewed_assumption_lock_coverage"]
+        assert lock[0]["status"] == "FAIL"
+
 
 class TestLegacyFallback:
     def test_legacy_mode_when_no_json(self, tmp_path):
@@ -248,3 +357,40 @@ class TestFileNotFound:
         result = validate_step4("/nonexistent/path/step4.md")
         assert result["passed"] is False
         assert "error" in result
+
+
+class TestStep4Guard:
+    def test_writes_blocker_after_max_attempts(self, tmp_path):
+        md_path = _write_step4_md(tmp_path, "# Step 4\nIncomplete\n")
+        first = validate_step4_with_guard(md_path, max_attempts=2)
+        assert first["passed"] is False
+        assert first["guard"]["attempt_count"] == 1
+        assert first["guard"]["should_stop"] is False
+
+        second = validate_step4_with_guard(md_path, max_attempts=2)
+        assert second["passed"] is False
+        assert second["guard"]["attempt_count"] == 2
+        assert second["guard"]["should_stop"] is True
+        assert (tmp_path / "step4_blockers.md").exists()
+
+    def test_resets_guard_on_pass(self, tmp_path):
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, _full_valid_structured())
+        (tmp_path / "calculated_valuation.json").write_text(json.dumps({
+            "source": "calculated",
+            "pe_trailing": {"pe": 20.0, "valid": True},
+            "pb": {"pb": 3.0, "valid": True},
+            "ps": {"ps": 5.0, "valid": True},
+        }), encoding="utf-8")
+        (tmp_path / "_reviewed_assumptions.json").write_text(json.dumps({
+            "reviewed_at": "2026-01-01",
+            "assumptions": {
+                "rev_growth": {"p10": 0.03, "p50": 0.1167, "p90": 0.19},
+                "gross_margin": {"p10": 0.35, "p50": 0.45, "p90": 0.52},
+                "pe": {"p10": 15, "p50": 22, "p90": 35},
+            },
+        }), encoding="utf-8")
+        result = validate_step4_with_guard(md_path, max_attempts=2)
+        assert result["passed"] is True
+        state = json.loads((tmp_path / "step4_guard_state.json").read_text(encoding="utf-8"))
+        assert state["attempt_count"] == 0

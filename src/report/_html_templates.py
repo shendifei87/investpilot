@@ -70,6 +70,10 @@ th { padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; }
 td { padding: 10px 16px; border-bottom: 1px solid #eef0f4; }
 tbody tr:nth-child(even) { background: #f8f9fb; }
 tbody tr:hover { background: #eef3fa; }
+.financial-model-table th:not(:first-child), .financial-model-table td:not(:first-child) { text-align: right; }
+.financial-model-table th:last-child, .financial-model-table td:last-child { text-align: left; color: #5b6472; font-size: 12.5px; }
+.financial-model-table td:first-child { min-width: 170px; }
+.financial-model p { margin-bottom: 12px; color: #4b5563; }
 
 /* Callout Boxes */
 .callout { border-radius: 8px; padding: 16px 20px; margin: 16px 0; font-size: 14px; }

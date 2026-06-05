@@ -430,8 +430,10 @@ def verify_assumption_consistency(
 ) -> dict:
     """Verify Monte Carlo assumptions match the user-reviewed matrix.
 
-    Compares the P10/P50/P90 of each variable between the reviewed matrix
-    and the actual distributions passed to run_monte_carlo().
+    Compares the reviewed percentiles (P10/P50/P90 when present) of each
+    variable against the actual distributions passed to run_monte_carlo().
+    New simulation variables and omitted reviewed variables are hard failures:
+    the Monte Carlo model must be identical to the user-reviewed matrix.
 
     Returns {passed: bool, warnings: list, violations: list}.
     """
@@ -451,27 +453,44 @@ def verify_assumption_consistency(
     violations = []
     warnings = []
 
+    sim_vars = set(monte_carlo_assumptions.keys())
+    reviewed_vars = set(reviewed_assumptions.keys())
+
+    for var_name in sorted(sim_vars - reviewed_vars):
+        violations.append(
+            f"Variable '{var_name}' not in reviewed matrix — new variable added post-review"
+        )
+
+    for var_name in sorted(reviewed_vars - sim_vars):
+        violations.append(
+            f"Reviewed variable '{var_name}' is absent from Monte Carlo assumptions"
+        )
+
+    percentile_map = {"p10": 0.10, "p50": 0.50, "p90": 0.90}
+
     for var_name, dist in monte_carlo_assumptions.items():
         if var_name not in reviewed_assumptions:
-            warnings.append(f"Variable '{var_name}' not in reviewed matrix — new variable added post-review")
             continue
 
         reviewed_var = reviewed_assumptions[var_name]
-        if isinstance(reviewed_var, dict) and "p50" in reviewed_var:
-            reviewed_p50 = reviewed_var["p50"]
-            # Use median (P50) for comparison, not mean — lognormal mean is skewed above median
-            actual_p50 = float(dist.ppf(0.5))
+        if isinstance(reviewed_var, dict):
+            for key, q in percentile_map.items():
+                if key not in reviewed_var:
+                    continue
+                reviewed_value = reviewed_var[key]
+                actual_value = float(dist.ppf(q))
 
-            if reviewed_p50 != 0:
-                drift = abs(actual_p50 - reviewed_p50) / abs(reviewed_p50)
-            else:
-                drift = abs(actual_p50 - reviewed_p50)
+                if reviewed_value != 0:
+                    drift = abs(actual_value - reviewed_value) / abs(reviewed_value)
+                else:
+                    drift = abs(actual_value - reviewed_value)
 
-            if drift > tolerance:
-                violations.append(
-                    f"Variable '{var_name}': P50 drifted from {reviewed_p50} (reviewed) "
-                    f"to {actual_p50:.4f} (simulation) — {drift:.1%} change exceeds {tolerance:.0%} tolerance"
-                )
+                if drift > tolerance:
+                    violations.append(
+                        f"Variable '{var_name}': {key.upper()} drifted from {reviewed_value} "
+                        f"(reviewed) to {actual_value:.4f} (simulation) — {drift:.1%} "
+                        f"change exceeds {tolerance:.0%} tolerance"
+                    )
 
     passed = len(violations) == 0
 

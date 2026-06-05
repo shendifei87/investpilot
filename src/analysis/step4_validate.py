@@ -35,6 +35,8 @@ import json
 import re
 from pathlib import Path
 
+from src.analysis.step4_schema import STEP4_STRUCTURED_FILENAME
+
 
 # ──────────────────────────────────────────────
 #  Structured JSON helpers
@@ -42,13 +44,98 @@ from pathlib import Path
 
 def _load_structured_json(filepath: Path) -> dict | None:
     """Load step4_structured_assumptions.json if it exists alongside the markdown."""
-    json_path = filepath.parent / "step4_structured_assumptions.json"
+    json_path = filepath.parent / STEP4_STRUCTURED_FILENAME
     if not json_path.exists():
         return None
     try:
         return json.loads(json_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def _to_float(value) -> float | None:
+    """Best-effort float coercion for validator arithmetic."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text:
+            return None
+        is_pct = text.endswith("%")
+        text = text.rstrip("%xX")
+        try:
+            num = float(text)
+        except ValueError:
+            return None
+        return num / 100 if is_pct else num
+    return None
+
+
+def _workspace_evidence_ids(workspace: Path) -> set[str]:
+    """Collect structured evidence IDs known to this workspace."""
+    ids = {"calculated_valuation.json", "valuation_raw_inputs.json", "price_history.csv"}
+
+    material_path = workspace / "material_extracts.json"
+    if material_path.exists():
+        try:
+            data = json.loads(material_path.read_text(encoding="utf-8"))
+            ids.update(e.get("id", "") for e in data.get("extractions", []) if e.get("id"))
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    consensus_path = workspace / "consensus_snapshot.json"
+    if consensus_path.exists():
+        try:
+            data = json.loads(consensus_path.read_text(encoding="utf-8"))
+            ids.update(g.get("id", "") for g in data.get("expectation_gaps", []) if g.get("id"))
+            ids.update(s.get("id", "") for s in data.get("snapshots", []) if s.get("id"))
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    return ids
+
+
+def _evidence_ref_ok(ref: str, known_ids: set[str]) -> bool:
+    """Validate evidence references without blocking local raw-data aliases."""
+    ref = str(ref or "").strip()
+    if not ref:
+        return False
+    if ref in known_ids:
+        return True
+    # DATA/CALC/WEB prefixes are intentionally allowed because not every raw
+    # source has a generated workspace ID yet.
+    return ref.startswith(("DATA:", "CALC:", "WEB:", "FILING:", "MODEL:"))
+
+
+def _validate_percentile_order(row: dict, label: str, keys: tuple[str, ...]) -> dict:
+    values = []
+    missing = []
+    for key in keys:
+        val = _to_float(row.get(key))
+        if val is None:
+            missing.append(key)
+        else:
+            values.append((key, val))
+
+    if missing:
+        return {
+            "check": f"percentile_order:{label}",
+            "status": "FAIL",
+            "detail": f"{label} missing percentile values: {missing}",
+        }
+
+    bad = [
+        f"{values[i][0]}={values[i][1]} > {values[i + 1][0]}={values[i + 1][1]}"
+        for i in range(len(values) - 1)
+        if values[i][1] > values[i + 1][1]
+    ]
+    return {
+        "check": f"percentile_order:{label}",
+        "status": "FAIL" if bad else "PASS",
+        "detail": "; ".join(bad) if bad else f"{label} percentiles are monotonic",
+    }
 
 
 def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
@@ -61,12 +148,14 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     # ── Check 1: Required sections ──
     required_keys = [
         "segment_revenues", "bridge_analysis", "q1_constraint",
-        "margin_derivation", "growth_drivers",
+        "margin_derivation", "growth_drivers", "assumption_matrix",
     ]
     for key in required_keys:
         present = key in structured and structured[key] is not None
         if key == "growth_drivers":
             present = present and len(structured.get("growth_drivers", [])) > 0
+        if key == "assumption_matrix":
+            present = present and len(structured.get("assumption_matrix", [])) > 0
         checks.append({
             "check": f"required_section:{key}",
             "status": "PASS" if present else "MISSING",
@@ -76,22 +165,29 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     # ── Check 2: Bridge arithmetic ──
     bridge = structured.get("bridge_analysis", {})
     if bridge and "base_total" in bridge and "p50_total" in bridge and "delta" in bridge:
-        base = bridge["base_total"]
-        delta = bridge["delta"]
-        stated = bridge["p50_total"]
-        expected = base + delta
-        if abs(expected) > 0.01:
-            diff_pct = abs(stated - expected) / abs(expected)
+        base = _to_float(bridge.get("base_total"))
+        delta = _to_float(bridge.get("delta"))
+        stated = _to_float(bridge.get("p50_total"))
+        if base is None or delta is None or stated is None:
+            checks.append({
+                "check": "bridge_arithmetic",
+                "status": "FAIL",
+                "detail": "bridge_analysis base_total, delta, and p50_total must be numeric",
+            })
         else:
-            diff_pct = 0.0
-        checks.append({
-            "check": "bridge_arithmetic",
-            "status": "PASS" if diff_pct < 0.05 else "FAIL",
-            "detail": (
-                f"Bridge: {base} + {delta} = {expected} vs stated {stated} "
-                f"(diff {diff_pct:.1%})"
-            ),
-        })
+            expected = base + delta
+            if abs(expected) > 0.01:
+                diff_pct = abs(stated - expected) / abs(expected)
+            else:
+                diff_pct = 0.0
+            checks.append({
+                "check": "bridge_arithmetic",
+                "status": "PASS" if diff_pct < 0.05 else "FAIL",
+                "detail": (
+                    f"Bridge: {base} + {delta} = {expected} vs stated {stated} "
+                    f"(diff {diff_pct:.1%})"
+                ),
+            })
     else:
         checks.append({
             "check": "bridge_arithmetic",
@@ -102,21 +198,33 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     # ── Check 3: Segment sum vs total ──
     segments = structured.get("segment_revenues", [])
     if segments and len(segments) >= 2:
-        seg_total = sum(s.get("p50_revenue", 0) for s in segments)
-        stated_total = bridge.get("p50_total", 0) if bridge else 0
-        if stated_total > 0:
-            diff = abs(seg_total - stated_total) / stated_total
+        component_segments = [
+            s for s in segments
+            if str(s.get("name", "")).strip().lower() != "total"
+        ]
+        numeric_revenues = [_to_float(s.get("p50_revenue")) for s in component_segments]
+        if any(v is None for v in numeric_revenues):
             checks.append({
                 "check": "segment_sum",
-                "status": "PASS" if diff < 0.05 else "FAIL",
-                "detail": f"Segment sum {seg_total:.1f} vs stated total {stated_total:.1f} ({diff:.1%})",
+                "status": "FAIL",
+                "detail": "segment_revenues p50_revenue values must be numeric",
             })
         else:
-            checks.append({
-                "check": "segment_sum",
-                "status": "PASS",
-                "detail": f"Found {len(segments)} segment revenue entries",
-            })
+            seg_total = sum(numeric_revenues)
+            stated_total = _to_float(bridge.get("p50_total")) if bridge else None
+            if stated_total and stated_total > 0:
+                diff = abs(seg_total - stated_total) / stated_total
+                checks.append({
+                    "check": "segment_sum",
+                    "status": "PASS" if diff < 0.05 else "FAIL",
+                    "detail": f"Segment sum {seg_total:.1f} vs stated total {stated_total:.1f} ({diff:.1%})",
+                })
+            else:
+                checks.append({
+                    "check": "segment_sum",
+                    "status": "PASS",
+                    "detail": f"Found {len(component_segments)} component segment revenue entries",
+                })
     else:
         checks.append({
             "check": "segment_sum",
@@ -127,7 +235,7 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     # ── Check 4: Q1 constraint ──
     q1 = structured.get("q1_constraint", {})
     if q1 and "feasibility" in q1:
-        feas = q1["feasibility"]
+        feas = str(q1["feasibility"])
         checks.append({
             "check": "q1_constraint",
             "status": "FAIL" if "UNREASONABLE" in feas else "PASS",
@@ -162,6 +270,9 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
         "status": "PASS" if drivers else "FAIL",
         "detail": f"Found {len(drivers)} segment growth driver decompositions",
     })
+
+    checks.extend(_validate_growth_driver_integrity(structured, filepath.parent))
+    checks.extend(_validate_assumption_matrix(structured, filepath.parent))
 
     # ── Check 7: Historical valuation anchor ──
     hist_val = structured.get("historical_valuation", {})
@@ -218,11 +329,15 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     # ── Check 10: DCF cross-validation ──
     dcf = structured.get("dcf_cross_validation", {})
     if dcf and "deviation_pct" in dcf:
-        dev = dcf["deviation_pct"]
+        dev = _to_float(dcf.get("deviation_pct"))
         checks.append({
             "check": "dcf_cross_validation",
-            "status": "PASS" if abs(dev) < 0.30 else "FAIL",
-            "detail": f"DCF vs MC deviation: {dev:.1%}",
+            "status": "PASS" if dev is not None and abs(dev) < 0.30 else "FAIL",
+            "detail": (
+                f"DCF vs MC deviation: {dev:.1%}"
+                if dev is not None
+                else "dcf_cross_validation.deviation_pct must be numeric"
+            ),
         })
     else:
         checks.append({
@@ -306,6 +421,193 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     return checks
 
 
+def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list[dict]:
+    """Validate that segment growth comes from driver decomposition."""
+    checks = []
+    segments = structured.get("segment_revenues", []) or []
+    driver_rows = structured.get("growth_drivers", []) or []
+    known_ids = _workspace_evidence_ids(workspace)
+
+    driver_by_segment = {
+        str(row.get("segment", "")).strip().lower(): row
+        for row in driver_rows
+        if row.get("segment")
+    }
+    missing_segments = []
+    weak_segments = []
+    evidence_issues = []
+    arithmetic_issues = []
+
+    for segment in segments:
+        name = str(segment.get("name", "")).strip()
+        if not name or name.lower() == "total":
+            continue
+        row = driver_by_segment.get(name.lower())
+        if not row:
+            missing_segments.append(name)
+            continue
+
+        ds = row.get("drivers", []) or []
+        if len(ds) < 2:
+            weak_segments.append(f"{name}: needs >=2 drivers, got {len(ds)}")
+
+        contributions = []
+        for d in ds:
+            refs = d.get("evidence_ids") or d.get("evidence_id") or []
+            if isinstance(refs, str):
+                refs = [refs]
+            if not refs:
+                evidence_issues.append(f"{name}/{d.get('name', '?')}: missing evidence_ids")
+            else:
+                bad_refs = [r for r in refs if not _evidence_ref_ok(str(r), known_ids)]
+                if bad_refs:
+                    evidence_issues.append(
+                        f"{name}/{d.get('name', '?')}: unknown evidence refs {bad_refs}"
+                    )
+
+            contrib = _to_float(d.get("contribution_pct"))
+            if contrib is None:
+                arithmetic_issues.append(
+                    f"{name}/{d.get('name', '?')}: missing numeric contribution_pct"
+                )
+            else:
+                contributions.append(contrib)
+
+        stated_growth = _to_float(segment.get("p50_growth"))
+        if stated_growth is not None and len(contributions) == len(ds) and contributions:
+            summed = sum(contributions)
+            if abs(summed - stated_growth) > 0.05:
+                arithmetic_issues.append(
+                    f"{name}: driver contribution sum {summed:.1%} vs segment p50_growth {stated_growth:.1%}"
+                )
+
+        pct_keys = tuple(k for k in ("p10_growth", "p30_growth", "p50_growth", "p70_growth", "p90_growth") if k in segment)
+        if len(pct_keys) >= 3:
+            checks.append(_validate_percentile_order(segment, f"segment:{name}", pct_keys))
+
+    checks.append({
+        "check": "driver_segment_coverage",
+        "status": "FAIL" if missing_segments else "PASS",
+        "detail": (
+            f"Missing driver decomposition for segments: {missing_segments}"
+            if missing_segments
+            else "Every non-total segment has a driver decomposition"
+        ),
+    })
+    checks.append({
+        "check": "driver_minimum_depth",
+        "status": "FAIL" if weak_segments else "PASS",
+        "detail": "; ".join(weak_segments) if weak_segments else "Each segment has at least two drivers",
+    })
+    checks.append({
+        "check": "driver_evidence_links",
+        "status": "FAIL" if evidence_issues else "PASS",
+        "detail": "; ".join(evidence_issues) if evidence_issues else "Every driver has valid evidence refs",
+    })
+    checks.append({
+        "check": "driver_arithmetic",
+        "status": "FAIL" if arithmetic_issues else "PASS",
+        "detail": "; ".join(arithmetic_issues) if arithmetic_issues else "Driver contributions reconcile to segment growth",
+    })
+
+    return checks
+
+
+def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]:
+    """Validate variable-level assumptions before Monte Carlo."""
+    checks = []
+    matrix = structured.get("assumption_matrix", []) or []
+    known_ids = _workspace_evidence_ids(workspace)
+
+    missing_required = []
+    evidence_issues = []
+    high_sensitivity_vars = []
+    matrix_vars = set()
+
+    for idx, row in enumerate(matrix):
+        label = row.get("variable") or f"row_{idx}"
+        matrix_vars.add(str(label))
+        required = ["variable", "p10", "p50", "p90", "sensitivity", "evidence_ids"]
+        miss = [k for k in required if row.get(k) in (None, "", [])]
+        if miss:
+            missing_required.append(f"{label}: missing {miss}")
+
+        refs = row.get("evidence_ids") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        bad_refs = [r for r in refs if not _evidence_ref_ok(str(r), known_ids)]
+        if bad_refs:
+            evidence_issues.append(f"{label}: unknown evidence refs {bad_refs}")
+
+        keys = tuple(k for k in ("p10", "p30", "p50", "p70", "p90") if k in row)
+        if len(keys) >= 3:
+            checks.append(_validate_percentile_order(row, f"assumption:{label}", keys))
+
+        if str(row.get("sensitivity", "")).lower() == "high":
+            high_sensitivity_vars.append(str(label))
+
+    contrarian = structured.get("contrarian_checks", []) or []
+    contrarian_vars = {
+        str(c.get("variable", ""))
+        for c in contrarian
+        if c.get("variable")
+    }
+    missing_contrarian = [v for v in high_sensitivity_vars if v not in contrarian_vars]
+
+    checks.append({
+        "check": "assumption_matrix_required_fields",
+        "status": "FAIL" if missing_required else "PASS",
+        "detail": "; ".join(missing_required) if missing_required else f"{len(matrix)} assumptions have required fields",
+    })
+    checks.append({
+        "check": "assumption_matrix_evidence_links",
+        "status": "FAIL" if evidence_issues else "PASS",
+        "detail": "; ".join(evidence_issues) if evidence_issues else "Every assumption has valid evidence refs",
+    })
+    checks.append({
+        "check": "high_sensitivity_contrarian_coverage",
+        "status": "FAIL" if missing_contrarian else "PASS",
+        "detail": (
+            f"High-sensitivity variables missing contrarian checks: {missing_contrarian}"
+            if missing_contrarian
+            else "Every high-sensitivity variable has a contrarian check"
+        ),
+    })
+
+    reviewed_path = workspace / "_reviewed_assumptions.json"
+    if reviewed_path.exists():
+        try:
+            reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
+            reviewed_vars = set((reviewed.get("assumptions") or {}).keys())
+            missing_review = [v for v in matrix_vars if v not in reviewed_vars]
+            extra_review = [v for v in reviewed_vars if v not in matrix_vars]
+            status = "FAIL" if missing_review or extra_review else "PASS"
+            detail = []
+            if missing_review:
+                detail.append(f"not saved in reviewed assumptions: {missing_review}")
+            if extra_review:
+                detail.append(f"reviewed but absent from matrix: {extra_review}")
+            checks.append({
+                "check": "reviewed_assumption_lock_coverage",
+                "status": status,
+                "detail": "; ".join(detail) if detail else "Reviewed assumptions cover the full matrix",
+            })
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            checks.append({
+                "check": "reviewed_assumption_lock_coverage",
+                "status": "FAIL",
+                "detail": f"_reviewed_assumptions.json is invalid: {e}",
+            })
+    else:
+        checks.append({
+            "check": "reviewed_assumption_lock_coverage",
+            "status": "FAIL",
+            "detail": "_reviewed_assumptions.json missing. Save user-reviewed matrix before validation.",
+        })
+
+    return checks
+
+
 # ──────────────────────────────────────────────
 #  Main entry point
 # ──────────────────────────────────────────────
@@ -350,21 +652,7 @@ def validate_step4(filepath: str | Path) -> dict:
     calc_val_check = _check_workspace_calculated_valuation(filepath)
     checks.append(calc_val_check)
 
-    fix_required = [c["detail"] for c in checks if c["status"] == "FAIL"]
-
-    # ── Check 13 bonus: if calculated_valuation.json exists, upgrade Check 13 ──
-    pe_source_check = next(
-        (c for c in checks if c["check"] == "valuation_ratios_calculated"),
-        None,
-    )
-    if calc_val_check["status"] == "PASS" and pe_source_check and pe_source_check["status"] != "PASS":
-        idx = checks.index(pe_source_check)
-        checks[idx] = {
-            "check": "valuation_ratios_calculated",
-            "status": "PASS",
-            "detail": "calculated_valuation.json present with source=calculated — strong signal of self-computation",
-        }
-        fix_required = [f for f in fix_required if "估值指标疑似来自" not in f and "缺少估值指标的计算过程" not in f]
+    fix_required = [c["detail"] for c in checks if c["status"] in {"FAIL", "MISSING"}]
 
     passed = len(fix_required) == 0
 
@@ -375,6 +663,117 @@ def validate_step4(filepath: str | Path) -> dict:
         "validation_mode": validation_mode,
         "summary": f"{'ALL CHECKS PASSED' if passed else f'{len(fix_required)} ISSUE(S) FOUND — FIX BEFORE MONTE CARLO'}",
     }
+
+
+def _classify_step4_blockers(fix_required: list[str]) -> str:
+    text = "\n".join(str(f) for f in fix_required).lower()
+    data_tokens = [
+        "missing",
+        "not found",
+        "缺少",
+        "missing required",
+        "evidence",
+        "source",
+        "calculated_valuation",
+        "reviewed assumptions",
+    ]
+    if any(token in text for token in data_tokens):
+        return "DATA_BLOCKED"
+    return "MODEL_BLOCKED"
+
+
+def write_step4_blockers(
+    workspace_dir: str | Path,
+    validation_result: dict,
+    attempt_count: int,
+    max_attempts: int,
+) -> Path:
+    """Write a durable blocker note when Step 4 repeatedly fails validation."""
+    workspace = Path(workspace_dir)
+    workspace.mkdir(parents=True, exist_ok=True)
+    blocker_type = _classify_step4_blockers(validation_result.get("fix_required", []))
+    lines = [
+        "# Step 4 Blockers",
+        "",
+        f"**Status**: {blocker_type}",
+        f"**Validation attempts**: {attempt_count}/{max_attempts}",
+        f"**Summary**: {validation_result.get('summary', '')}",
+        "",
+        "## Fix Required",
+        "",
+    ]
+    for item in validation_result.get("fix_required", []):
+        lines.append(f"- {item}")
+    lines.extend([
+        "",
+        "## Handling Rule",
+        "",
+        "Stop automatic repair attempts. Do not run Monte Carlo or generate the forecast model until these blockers are resolved.",
+    ])
+    path = workspace / "step4_blockers.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def validate_step4_with_guard(
+    filepath: str | Path,
+    max_attempts: int = 2,
+    reset_on_pass: bool = True,
+) -> dict:
+    """Validate Step 4 and cap repeated failed repair loops.
+
+    A failed validation increments ``step4_guard_state.json`` in the workspace.
+    Once failures reach ``max_attempts``, ``step4_blockers.md`` is written and
+    callers should stop automatic repair attempts.
+    """
+    filepath = Path(filepath)
+    workspace = filepath.parent
+    result = validate_step4(filepath)
+    state_path = workspace / "step4_guard_state.json"
+
+    state = {"attempt_count": 0}
+    if state_path.exists():
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                state.update(loaded)
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    if result.get("passed"):
+        if reset_on_pass:
+            state = {"attempt_count": 0, "last_status": "passed"}
+            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        result["guard"] = {
+            "status": "passed",
+            "attempt_count": 0,
+            "max_attempts": max_attempts,
+            "should_stop": False,
+        }
+        return result
+
+    attempt_count = int(state.get("attempt_count", 0)) + 1
+    blocker_type = _classify_step4_blockers(result.get("fix_required", []))
+    guard = {
+        "status": "failed",
+        "attempt_count": attempt_count,
+        "max_attempts": max_attempts,
+        "blocker_type": blocker_type,
+        "should_stop": attempt_count >= max_attempts,
+    }
+    if guard["should_stop"]:
+        blocker_path = write_step4_blockers(workspace, result, attempt_count, max_attempts)
+        guard["blocker_path"] = str(blocker_path)
+
+    state = {
+        "attempt_count": attempt_count,
+        "last_status": "failed",
+        "last_blocker_type": blocker_type,
+        "last_summary": result.get("summary", ""),
+    }
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    result["guard"] = guard
+    return result
 
 
 def _legacy_regex_checks(content: str) -> list[dict]:
@@ -485,7 +884,7 @@ def validate_workspace_valuation(workspace_dir: str | Path) -> dict:
         }
 
     if calc_data.get("source") != "calculated":
-        warnings_list.append(
+        fix_required.append(
             f"calculated_valuation.json 的 source 字段为 '{calc_data.get('source')}'，"
             "期望为 'calculated'。"
         )
@@ -494,9 +893,15 @@ def validate_workspace_valuation(workspace_dir: str | Path) -> dict:
     expected_keys = ["pe_trailing", "pb", "ps"]
     missing_ratios = [k for k in expected_keys if k not in calc_data]
     if missing_ratios:
-        warnings_list.append(
+        fix_required.append(
             f"calculated_valuation.json 缺少以下指标: {missing_ratios}"
         )
+    for key in expected_keys:
+        val = calc_data.get(key)
+        if isinstance(val, dict) and not val.get("valid", False):
+            fix_required.append(
+                f"calculated_valuation.json 中 {key} 无效: {val.get('error', 'invalid')}"
+            )
 
     passed = len(fix_required) == 0
     return {

@@ -36,7 +36,7 @@ STEP_NAMES = {
     1: "Business Deep Dive",
     2: "Competitive Moat",
     3: "Marginal Changes & Expectation Gap",
-    4: "Quantitative Model & Monte Carlo",
+    4: "Quantitative Model & Simulation",
     5: "RRR & Trading Strategy",
     6: "Auditing & Quality Control",
     7: "Research Director Review",
@@ -202,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/" or path == "/index.html":
-            html = (WEB / "index.html").read_text()
+            html = (WEB / "index.html").read_text(encoding="utf-8")
             self._html(html)
             return
 
@@ -265,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
             ticker, ws = resolved
             img = unquote(m.group(2))
             img_path = _safe_path(ws, img)
-            if img_path is None or not img_path.exists() or img_path.suffix != ".png":
+            if img_path is None or not img_path.exists() or img_path.suffix.lower() != ".png":
                 self._json({"error": "Not found"}, 404)
                 return
             self.send_response(200)
@@ -283,7 +283,7 @@ class Handler(BaseHTTPRequestHandler):
             ticker, ws = resolved
             filename = unquote(m.group(2))
             file_path = _safe_path(ws, filename)
-            if file_path is None or not file_path.exists() or file_path.suffix != ".html":
+            if file_path is None or not file_path.exists() or file_path.suffix.lower() != ".html":
                 self._json({"error": "Not found"}, 404)
                 return
             self.send_response(200)
@@ -300,14 +300,22 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Enforce request size limit
-        content_length = int(self.headers.get("Content-Length", 0))
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self._json({"error": "Invalid Content-Length"}, 400)
+            return
         if content_length > MAX_UPLOAD_BYTES:
             self._too_large()
             return
 
         parsed = urlparse(self.path)
         if parsed.path == "/api/research":
-            body = json.loads(self.rfile.read(content_length)) if content_length else {}
+            try:
+                body = json.loads(self.rfile.read(content_length)) if content_length else {}
+            except json.JSONDecodeError:
+                self._json({"error": "Invalid JSON"}, 400)
+                return
             ticker = body.get("ticker", "").strip().upper()
             notes = body.get("notes", "").strip()
 

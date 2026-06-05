@@ -136,3 +136,150 @@ class TestBrief:
         assert "Source Material Extraction Brief" in brief
         assert "Management Guidance" in brief
         assert "Revenue outlook" in brief
+
+
+class TestCoverageValidation:
+    def test_validate_coverage_fails_missing_required_types(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker.add_document("annual.pdf", doc_type="annual_report")
+        result = tracker.validate_coverage()
+        assert result["passed"] is False
+        assert result["fix_required"]
+
+    def test_validate_coverage_passes_with_required_extractions(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document("annual.pdf", doc_type="annual_report")
+        for extract_type in [
+            "business_overview",
+            "management_guidance",
+            "segment_forecast",
+            "financial_fact",
+            "risk_factor",
+        ]:
+            tracker.record_extraction(
+                doc["id"],
+                extract_type,
+                topic=f"{extract_type} MD&A",
+                value="value",
+                evidence="evidence",
+                tags=["mda"] if extract_type == "management_guidance" else [],
+            )
+        result = tracker.validate_coverage()
+        assert result["passed"] is True
+
+    def test_validate_coverage_requires_broker_assumption_when_requested(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker.add_document("broker.pdf", doc_type="broker_report")
+        result = tracker.validate_coverage(
+            required_extraction_types=[],
+            require_annual_mda=False,
+            require_broker_assumptions=True,
+        )
+        assert result["passed"] is False
+        assert "broker_assumption" in result["fix_required"][0]
+
+    def test_pdf_read_attempt_limit_requires_fallback(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document("annual.pdf", doc_type="annual_report")
+
+        tracker.record_read_attempt(doc["id"], "encoding_error", error="GBK decode failed", max_attempts=2)
+        updated = tracker.record_read_attempt(doc["id"], "parse_error", error="garbled Chinese text", max_attempts=2)
+
+        assert updated["fallback_required"] is True
+        assert updated["read_status"] == "blocked_pdf_read"
+        with pytest.raises(ValueError, match="attempt limit"):
+            tracker.record_read_attempt(doc["id"], "parse_error", error="same failure", max_attempts=2)
+
+    def test_validate_coverage_blocks_unresolved_pdf_fallback(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document("annual.pdf", doc_type="annual_report")
+        tracker.record_read_attempt(doc["id"], "encoding_error", error="decode failed", max_attempts=1)
+
+        result = tracker.validate_coverage(required_extraction_types=[])
+
+        assert result["passed"] is False
+        assert any("PDF read failed" in item for item in result["fix_required"])
+
+    def test_web_fallback_rejects_news_or_incomplete_sources(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document("annual.pdf", doc_type="annual_report")
+
+        with pytest.raises(ValueError, match="not news"):
+            tracker.record_web_fallback(doc["id"], "https://example.com/news", "news", True)
+        with pytest.raises(ValueError, match="complete"):
+            tracker.record_web_fallback(doc["id"], "https://example.com/summary", "company_ir", False)
+
+    def test_validate_coverage_rejects_unmarked_web_annual_source(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document(
+            "annual.pdf",
+            doc_type="annual_report",
+            source_url="https://example.com/annual-report",
+            source_kind="company_ir",
+        )
+        tracker.record_extraction(
+            doc["id"],
+            "management_guidance",
+            topic="MD&A outlook",
+            value="value",
+            evidence="MD&A evidence",
+            tags=["mda"],
+        )
+
+        result = tracker.validate_coverage(required_extraction_types=[])
+
+        assert result["passed"] is False
+        assert any("complete annual/interim report" in item for item in result["fix_required"])
+
+    def test_validate_coverage_requires_explicit_mda_marker(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document("annual.pdf", doc_type="annual_report")
+        for extract_type in [
+            "business_overview",
+            "management_guidance",
+            "segment_forecast",
+            "financial_fact",
+            "risk_factor",
+        ]:
+            tracker.record_extraction(
+                doc["id"],
+                extract_type,
+                topic=f"{extract_type} generic",
+                value="value",
+                evidence="evidence",
+            )
+
+        result = tracker.validate_coverage()
+
+        assert result["passed"] is False
+        assert any("MD&A" in item for item in result["fix_required"])
+
+    def test_official_complete_fallback_with_mda_extraction_passes(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        doc = tracker.add_document("annual.pdf", doc_type="annual_report")
+        tracker.record_read_attempt(doc["id"], "encoding_error", error="decode failed", max_attempts=1)
+        tracker.record_web_fallback(
+            doc["id"],
+            "https://example.com/investor-relations/annual-report.pdf",
+            "company_ir",
+            True,
+        )
+        for extract_type in [
+            "business_overview",
+            "management_guidance",
+            "segment_forecast",
+            "financial_fact",
+            "risk_factor",
+        ]:
+            tracker.record_extraction(
+                doc["id"],
+                extract_type,
+                topic=f"{extract_type} MD&A",
+                value="value",
+                evidence="MD&A evidence",
+                tags=["mda"] if extract_type == "management_guidance" else [],
+            )
+
+        result = tracker.validate_coverage()
+
+        assert result["passed"] is True

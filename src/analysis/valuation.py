@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from typing import Optional
 
 
 def load_price_series(workspace_dir) -> pd.Series:
@@ -51,15 +52,28 @@ def load_price_series(workspace_dir) -> pd.Series:
 def forward_pe_band(
     prices: pd.Series,
     forward_eps: float,
+    forward_eps_series: Optional[pd.Series] = None,
     window_weeks: int = 260,
 ) -> dict:
-    """Compute 5-year weekly forward PE series and percentile bands.
+    """Compute weekly forward PE series and percentile bands.
 
-    Forward PE = weekly close price / forward_eps.
+    Preferred method:
+        Forward PE at each historical date = price / point-in-time forward EPS.
+
+    Fallback method:
+        If ``forward_eps_series`` is unavailable, uses the supplied single
+        ``forward_eps`` for all historical dates and marks the result as a
+        constant-EPS proxy. This is useful for a price-band visual, but should
+        not be described as a true historical forward PE percentile.
 
     Args:
         prices: Daily close prices, datetime-indexed.
         forward_eps: User-defined Forward EPS (typically P50 from Step 4).
+        forward_eps_series: Optional point-in-time forward EPS series,
+            indexed by date. Values are forward-filled to weekly dates.
+            The series is accepted only if coverage >= max(12, min(len(weekly), 52))
+            weeks after forward-fill alignment — otherwise falls back to the
+            constant-EPS proxy.
         window_weeks: Number of weeks to include (default 260 = 5 years).
 
     Returns:
@@ -88,7 +102,18 @@ def forward_pe_band(
             "PE band may not be statistically meaningful."
         )
 
-    pe = weekly / forward_eps
+    method = "constant_forward_eps_proxy"
+    eps_used = pd.Series(forward_eps, index=weekly.index, dtype=float)
+    if forward_eps_series is not None and not forward_eps_series.empty:
+        eps_series = pd.to_numeric(forward_eps_series, errors="coerce").dropna()
+        eps_series.index = pd.to_datetime(eps_series.index)
+        eps_series = eps_series.sort_index()
+        aligned = eps_series.reindex(weekly.index, method="ffill")
+        if aligned.notna().sum() >= max(12, min(len(weekly), 52)):
+            eps_used = aligned
+            method = "point_in_time_forward_eps"
+
+    pe = weekly / eps_used
     pe = pe.replace([np.inf, -np.inf], np.nan).dropna()
 
     if pe.empty:
@@ -114,6 +139,9 @@ def forward_pe_band(
         "current_percentile": current_percentile,
         "current_price": current_price,
         "forward_eps": forward_eps,
+        "eps_series": eps_used.loc[pe.index],
+        "method": method,
+        "is_true_historical_forward_pe": method == "point_in_time_forward_eps",
         "n_weeks": len(pe),
     }
 

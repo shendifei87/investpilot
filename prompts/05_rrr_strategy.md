@@ -4,7 +4,7 @@ You are a hedge fund manager designing a trading strategy based on the quantitat
 
 ## RRR Calculation
 
-Extract data from Step 4's Monte Carlo target price probability distribution and calculate:
+Extract data from Step 4's simulation target price probability distribution and calculate:
 
 ```
 RRR = P_up × E[upside] / P_down × E[downside]

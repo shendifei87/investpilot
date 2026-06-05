@@ -385,53 +385,66 @@ class TestCalcRRR:
 # ── Assumption consistency guard ──────────────────────────────────
 
 class TestAssumptionConsistency:
+    def _setup_workspace(self, tmp_path, reviewed_data):
+        """Helper: create a temp workspace with reviewed assumptions."""
+        from src.storage import AtomicJSON
+        store = AtomicJSON(tmp_path)
+        store.save("_reviewed_assumptions.json", reviewed_data)
+        return str(tmp_path)
+
     def test_pass_when_consistent(self):
         """Verify consistency check passes when P50 matches."""
-        from src.storage import AtomicJSON
-        # Use the actual WORKSPACES_DIR and create a test workspace
-        from config.settings import WORKSPACES_DIR
-        test_ws = "test_consistency_ws"
-        ws_path = WORKSPACES_DIR / test_ws
-        ws_path.mkdir(parents=True, exist_ok=True)
-
-        try:
-            store = AtomicJSON(ws_path)
-            store.save("_reviewed_assumptions.json", {
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._setup_workspace(Path(tmp), {
                 "reviewed_at": "2026-01-01",
                 "assumptions": {"rev_growth": {"p50": 0.15}},
             })
             dist = NormalDist(mu=0.15, sigma=0.05)
-            result = verify_assumption_consistency(test_ws, {"rev_growth": dist})
+            result = verify_assumption_consistency(ws, {"rev_growth": dist})
             assert result["passed"], f"Should pass but got: {result}"
-        finally:
-            # Cleanup
-            import shutil
-            if ws_path.exists():
-                shutil.rmtree(ws_path)
 
     def test_fail_on_drift(self):
         """Verify that large P50 drift is caught."""
-        from src.storage import AtomicJSON
-        from config.settings import WORKSPACES_DIR
-        test_ws = "test_drift_ws"
-        ws_path = WORKSPACES_DIR / test_ws
-        ws_path.mkdir(parents=True, exist_ok=True)
-
-        try:
-            store = AtomicJSON(ws_path)
-            store.save("_reviewed_assumptions.json", {
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._setup_workspace(Path(tmp), {
                 "reviewed_at": "2026-01-01",
                 "assumptions": {"rev_growth": {"p50": 0.15}},
             })
             # Pass a distribution with very different P50
             dist = NormalDist(mu=0.50, sigma=0.05)
-            result = verify_assumption_consistency(test_ws, {"rev_growth": dist})
+            result = verify_assumption_consistency(ws, {"rev_growth": dist})
             assert not result["passed"], "Should detect P50 drift"
             assert len(result["violations"]) > 0
-        finally:
-            import shutil
-            if ws_path.exists():
-                shutil.rmtree(ws_path)
+
+    def test_fail_on_tail_percentile_drift(self):
+        """Verify that P10/P90 drift is caught, not just P50."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._setup_workspace(Path(tmp), {
+                "reviewed_at": "2026-01-01",
+                "assumptions": {"rev_growth": {"p10": 0.05, "p50": 0.15, "p90": 0.25}},
+            })
+            # Same P50, much wider tails.
+            dist = NormalDist(mu=0.15, sigma=0.15)
+            result = verify_assumption_consistency(ws, {"rev_growth": dist}, tolerance=0.05)
+            assert not result["passed"], "Should detect tail percentile drift"
+            assert any("P10" in v or "P90" in v for v in result["violations"])
+
+    def test_fail_on_new_post_review_variable(self):
+        """New Monte Carlo variables after review are hard failures."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._setup_workspace(Path(tmp), {
+                "reviewed_at": "2026-01-01",
+                "assumptions": {"rev_growth": {"p50": 0.15}},
+            })
+            result = verify_assumption_consistency(
+                ws,
+                {
+                    "rev_growth": NormalDist(mu=0.15, sigma=0.05),
+                    "pe": NormalDist(mu=20, sigma=2),
+                },
+            )
+            assert not result["passed"], "Should fail on a new post-review variable"
+            assert any("pe" in v for v in result["violations"])
 
 
 # ── Calibration ───────────────────────────────────────────────────

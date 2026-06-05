@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+import pandas as pd
 
 from config.ticker_rules import detect_market, normalize_ticker, get_tushare_code
 
@@ -155,6 +156,39 @@ class TestCmdAnalyze:
 
         output_dir = ws / "analysis"
         assert (output_dir / "technical_indicators.csv").exists()
+
+
+class TestAutoCalculateValuation:
+    def test_handles_financials_dataframe_without_boolean_ambiguity(self, tmp_path):
+        from src.cli import _auto_calculate_valuation
+        from src.data.base import FetchResult
+
+        dates = ["2025-12-31", "2024-12-31"]
+        income = pd.DataFrame({
+            "Total Revenue": [1000.0, 900.0],
+            "Net Income": [100.0, 90.0],
+        }, index=pd.to_datetime(dates))
+        balance = pd.DataFrame({
+            "Total Stockholder Equity": [500.0, 460.0],
+            "Total Assets": [1000.0, 950.0],
+        }, index=pd.to_datetime(dates))
+
+        results = {
+            "valuation": FetchResult(
+                success=True,
+                data={"current_price": 20.0, "shares_outstanding": 100.0, "eps_forward": 1.2},
+            ),
+            "financials": FetchResult(
+                success=True,
+                data={"financials": income, "balance_sheet": balance},
+            ),
+        }
+
+        _auto_calculate_valuation(results, tmp_path)
+
+        assert (tmp_path / "calculated_valuation.json").exists()
+        data = json.loads((tmp_path / "calculated_valuation.json").read_text(encoding="utf-8"))
+        assert data["source"] == "calculated"
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +507,13 @@ class TestCmdMaterials:
             "tags": None,
             "quote": None,
             "notes": None,
+            "status": None,
+            "method": None,
+            "error": None,
+            "max_attempts": None,
+            "url": None,
+            "source_kind": None,
+            "complete_report": False,
         }
         defaults.update(kwargs)
         for k, v in defaults.items():
@@ -535,6 +576,42 @@ class TestCmdMaterials:
             cmd_materials(brief_args)
         assert "Broker Assumption" in capsys.readouterr().out
 
+    def test_materials_read_attempt_and_web_fallback(self, tmp_path, capsys):
+        self._init_ws(tmp_path)
+        add_doc_args = self._make_args(
+            "add-doc",
+            file="annual.pdf",
+            doc_type="annual_report",
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(add_doc_args)
+        capsys.readouterr()
+
+        read_args = self._make_args(
+            "read-attempt",
+            document="annual.pdf",
+            status="encoding_error",
+            error="Chinese text extraction failed",
+            max_attempts=1,
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(read_args)
+        assert "blocked_pdf_read" in capsys.readouterr().out
+
+        fallback_args = self._make_args(
+            "web-fallback",
+            document="annual.pdf",
+            url="https://example.com/annual-report.pdf",
+            source_kind="company_ir",
+            complete_report=True,
+        )
+        with self._patch_ws(tmp_path)[0], self._patch_ws(tmp_path)[1]:
+            from src.cli import cmd_materials
+            cmd_materials(fallback_args)
+        assert "web_fallback_complete_report" in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # CLI cmd_knowledge
@@ -592,9 +669,88 @@ class TestCmdReport:
         args.ticker = "TEST"
         args.name = ""
 
-        with patch("src.cli.WORKSPACES_DIR", tmp_path), \
+        with patch("src.analysis._base.WORKSPACES_DIR", tmp_path), \
              patch("src.report.generator.generate_report_html") as mock_gen:
             mock_gen.return_value = ws / "report.html"
             from src.cli import cmd_report
             cmd_report(args)
             mock_gen.assert_called_once()
+
+    def test_report_subcommand_accepts_prefixed_workspace_path(self, tmp_path):
+        root = tmp_path / "workspaces"
+        ws = root / "TEST"
+        ws.mkdir(parents=True)
+        (ws / "step1_business_analysis.md").write_text("# Step 1\nContent", encoding="utf-8")
+
+        args = MagicMock()
+        args.workspace = "workspaces/TEST"
+        args.ticker = "TEST"
+        args.name = ""
+
+        with patch("src.analysis._base.WORKSPACES_DIR", root), \
+             patch("src.report.generator.generate_report_html") as mock_gen:
+            mock_gen.return_value = ws / "report.html"
+            from src.cli import cmd_report
+            cmd_report(args)
+
+        called_workspace = mock_gen.call_args.kwargs["workspace_dir"]
+        assert called_workspace == str(ws)
+
+
+class TestCmdModel:
+    def test_model_blocks_when_step4_validation_fails(self, tmp_path, capsys):
+        args = MagicMock()
+        args.workspace = "TEST"
+        args.ticker = "TEST"
+        args.max_attempts = 2
+
+        with patch("src.cli.WORKSPACES_DIR", tmp_path), \
+             patch("src.analysis.step4_validate.validate_step4_with_guard") as mock_validate, \
+             patch("src.analysis.financial_model.generate_financial_model_artifacts") as mock_model:
+            mock_validate.return_value = {
+                "passed": False,
+                "summary": "blocked",
+                "fix_required": ["missing drivers"],
+                "guard": {"should_stop": False, "attempt_count": 1},
+            }
+            from src.cli import cmd_model
+            with pytest.raises(SystemExit):
+                cmd_model(args)
+            mock_model.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Forecast model generation blocked" in out
+
+
+class TestCmdWorkflow:
+    def test_workflow_status_outputs_state(self, tmp_path, capsys):
+        args = MagicMock()
+        args.workspace = "TEST"
+        args.action = "status"
+        args.step = None
+        args.artifact = None
+        args.summary = ""
+        args.reason = ""
+        args.force = False
+
+        with patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"):
+            from src.cli import cmd_workflow
+            cmd_workflow(args)
+        result = json.loads(capsys.readouterr().out)
+        assert "steps" in result
+
+    def test_workflow_start_rejects_missing_dependency(self, tmp_path, capsys):
+        args = MagicMock()
+        args.workspace = "TEST"
+        args.action = "start"
+        args.step = 2
+        args.artifact = None
+        args.summary = ""
+        args.reason = ""
+        args.force = False
+
+        with patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"):
+            from src.cli import cmd_workflow
+            with pytest.raises(SystemExit):
+                cmd_workflow(args)
+        result = json.loads(capsys.readouterr().out)
+        assert result["started"] is False

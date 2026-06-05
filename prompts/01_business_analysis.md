@@ -20,6 +20,39 @@ materials = MaterialTracker(workspace_dir)
 materials.index_workspace_files()
 ```
 
+### PDF Read Failure Guard
+
+Annual/interim report MD&A is mandatory. If a local PDF cannot be read because
+of encoding, OCR, corrupted text, or Chinese character parsing issues, do not
+keep retrying the same PDF.
+
+Rules:
+- Record every PDF read attempt:
+  ```bash
+  python -m src.cli materials {workspace_dir} read-attempt \
+    --document annual_report.pdf \
+    --status encoding_error \
+    --error "Chinese text extraction failed" \
+    --max-attempts 2
+  ```
+- After 2 failed attempts, stop local PDF parsing and use WebSearch to find the
+  company's official IR page, exchange filing page, or regulator filing page
+  containing the **complete annual/interim report**.
+- News articles, press releases, media summaries, data-vendor summaries, and
+  broker-report excerpts are not valid substitutes for the annual/interim
+  report.
+- Record the fallback source before continuing:
+  ```bash
+  python -m src.cli materials {workspace_dir} web-fallback \
+    --document annual_report.pdf \
+    --url "https://..." \
+    --source-kind company_ir \
+    --complete-report
+  ```
+- Then read the MD&A / management discussion section from that complete report
+  and record an explicit MD&A extraction. Do not proceed with Step 1 unless
+  MD&A has been read and cited.
+
 For every annual/interim report and broker report that materially informs the analysis, record typed extractions into `material_extracts.json`:
 
 ```python
@@ -50,6 +83,14 @@ brief = materials.generate_research_brief()
 ```
 
 If a PDF is read but has no structured extraction, explicitly explain why in the Confidence & Data Source Summary.
+
+Before finalizing Step 1, validate extraction coverage:
+
+```bash
+python -m src.cli validate-materials {workspace_dir}
+```
+
+If validation fails, add the missing typed extractions or official complete-report fallback before writing the final Step 1 output. Missing explicit MD&A coverage is a hard blocker.
 
 ## Analysis Content (must cover all items)
 

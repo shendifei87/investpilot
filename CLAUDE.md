@@ -75,6 +75,38 @@ brief = tracker.generate_update_brief()
 
 ## 七步分析流程
 
+### 顺序执行硬规则（禁止并行）
+
+Step 1-7 必须严格串行执行，禁止 agent 自行并行推进多个 step。可以并行读取同一步所需文件，但不得同时撰写、验证或完成多个研究步骤。
+
+每一步开始前必须运行：
+
+```bash
+python -m src.cli workflow {workspace_dir} start --step N
+```
+
+每一步完成并写入产物后必须运行：
+
+```bash
+python -m src.cli workflow {workspace_dir} complete --step N --artifact stepN_xxx.md
+```
+
+如果某一步因为缺数据、验证失败或 blocker 无法继续，必须运行：
+
+```bash
+python -m src.cli workflow {workspace_dir} block --step N --reason "..."
+```
+
+依赖关系：
+- Step 2 必须等待 Step 1 completed
+- Step 3 必须等待 Step 1-2 completed
+- Step 4 必须等待 Step 1-3 completed
+- Step 5 必须等待 Step 1-4 completed
+- Step 6 必须等待 Step 1-5 completed
+- Step 7 必须等待 Step 1-6 completed
+
+不得用后台任务、多个 agent、或并行 tool 调用同时推进不同 step。若 workflow guard 拒绝 start/complete，必须停止当前 step 并修复前置依赖。
+
 ### Step 1: 业务面深入研究
 
 **读取 prompt**：`prompts/01_business_analysis.md`
@@ -87,6 +119,11 @@ brief = tracker.generate_update_brief()
    from src.analysis.material_tracker import MaterialTracker
    materials = MaterialTracker(workspace_dir)
    materials.index_workspace_files()
+   # 如果本地 PDF 因中文编码/OCR/损坏文本读不出，最多记录 2 次失败尝试：
+   # python -m src.cli materials {workspace_dir} read-attempt --document annual_report.pdf --status encoding_error --error "..." --max-attempts 2
+   # 达到上限后必须用 WebSearch 找官方 IR/交易所/监管披露的完整年报，并记录：
+   # python -m src.cli materials {workspace_dir} web-fallback --document annual_report.pdf --url "https://..." --source-kind company_ir --complete-report
+   # 新闻、公告摘要、媒体稿、数据商摘要、券商摘录不能替代完整年报。MD&A/管理层讨论必须读取并结构化记录。
    materials.record_extraction(
        document_ref="annual_report.pdf",
        extraction_type="management_guidance",
@@ -99,15 +136,20 @@ brief = tracker.generate_update_brief()
    )
    brief = materials.generate_research_brief()
    ```
-4. 使用 WebSearch 搜索最新行业动态
-5. 按 prompt 模板要求完成 7 个子项的分析（含盈余质量评分）+ **逆向检验（1.8）**
-6. **运行盈余质量评分**：
+4. **运行材料覆盖验证（硬阻断）**：
+   ```bash
+   python -m src.cli validate-materials {workspace_dir}
+   ```
+   若验证失败，必须补齐完整年报 fallback 或明确 MD&A extraction，不得继续写 Step 1。
+5. 使用 WebSearch 搜索最新行业动态
+6. 按 prompt 模板要求完成 7 个子项的分析（含盈余质量评分）+ **逆向检验（1.8）**
+7. **运行盈余质量评分**：
    ```python
    from src.analysis.financial import calc_earnings_quality
    calc_earnings_quality(income, balance, cashflow)
    ```
    → EQC 分数和等级
-7. 将分析结果写入 `workspaces/{workspace_dir}/step1_business_analysis.md`
+8. 将分析结果写入 `workspaces/{workspace_dir}/step1_business_analysis.md`
 
 ### Step 2: 竞争壁垒与护城河
 
@@ -176,16 +218,40 @@ brief = tracker.generate_update_brief()
 8. 每个变量给出至少 5 个分位点（P10/P30/P50/P70/P90），支持更多分位点（如 P5/P25/P75/P95），附场景叙事
 9. **逆向检验**：对每个关键变量回答"什么证据会让 P50 → P10？"
 10. **必须呈现完整假设矩阵给用户审阅，等待确认后再继续**
-11. **用户确认后，锁定审阅假设**：
+11. **用户确认后，先保存结构化 Step 4 假设，再锁定审阅假设**：
+   ```python
+   from src.analysis.step4_schema import save_structured_assumptions
+   save_structured_assumptions(workspace_dir, {
+       "segment_revenues": [...],
+       "growth_drivers": [...],        # 每个非合计 segment 至少 2 个 driver，含 contribution_pct + evidence_ids
+       "bridge_analysis": {...},
+       "q1_constraint": {...},
+       "margin_derivation": {...},
+       "assumption_matrix": [...],     # 每个高敏感变量含 P10/P30/P50/P70/P90 + evidence_ids
+       "financial_model_inputs": {...}, # shares/current_price/cash/debt/equity/NWC/PPE 等三表模型输入
+       "contrarian_checks": [...],     # 覆盖每个 high sensitivity variable
+       "historical_valuation": {...},
+       "peer_comparison": {...},
+       "valuation_source": {"pe_calculated": True, "calc_inputs_disclosed": True},
+       "reverse_dcf": {...},
+       "dcf_cross_validation": {...},
+       "assumption_consistency": {...},
+   })
+   ```
    ```python
    from src.analysis.monte_carlo import save_reviewed_assumptions
-   save_reviewed_assumptions(workspace_dir, {"rev_growth": {"p50": 0.15, ...}, "pe": {"p50": 60, ...}, ...})
+   save_reviewed_assumptions(workspace_dir, {"rev_growth": {"p10": 0.05, "p50": 0.15, "p90": 0.25}, "pe": {"p10": 40, "p50": 60, "p90": 80}, ...})
    ```
 12. **运行 Step 4 验证（硬阻断）**：
-    ```python
-    from src.analysis.step4_validate import validate_step4
-    result = validate_step4(f"workspaces/{workspace_dir}/step4_quantitative_model.md")
-    ```
+   ```python
+   from src.analysis.step4_validate import validate_step4
+   result = validate_step4(f"workspaces/{workspace_dir}/step4_quantitative_model.md")
+   ```
+   或：
+   ```bash
+   python -m src.cli validate-step4 {workspace_dir} --max-attempts 2
+   ```
+   失败验证会递增 `step4_guard_state.json`；连续 2 次失败后写入 `step4_blockers.md`。一旦出现 blocker 文件，停止自动修复，不允许运行蒙特卡洛或生成财务模型，直到 blocker 解决。
     **如果 `result["passed"]` 为 False，必须修复所有 `fix_required` 中的问题后才能继续。不允许在验证不通过的情况下运行蒙特卡洛。**
 13. 验证通过后，**验证假设一致性**，然后运行蒙特卡洛模拟：
     ```python
@@ -216,7 +282,12 @@ brief = tracker.generate_update_brief()
     save_calibration(workspace_dir, ticker, predicted_eps, "2026E", "medium", percentiles)
     ```
 14. 生成概率分布图（matplotlib）和分位数据表
-15. 写入 `workspaces/{workspace_dir}/step4_quantitative_model.md` + 分布图 PNG
+15. **生成公式连接的财务预测模型（强制）**：
+    ```bash
+    python -m src.cli model {workspace_dir} --ticker {ticker}
+    ```
+    该命令会先自动运行 Step 4 验证；验证失败则拒绝生成模型。产出 `forecast_model.json` + `forecast_model.html`，包含分部收入 build、利润表、现金流、简化资产负债表、估值桥和 checks。该模型与最终报告同等重要，最终 HTML 报告会自动嵌入。
+16. 写入 `workspaces/{workspace_dir}/step4_quantitative_model.md` + 分布图 PNG
 
 ### Step 4b: Forward PE Band（估值区间图）
 
@@ -231,10 +302,10 @@ brief = tracker.generate_update_brief()
    ws = Path(f"workspaces/{workspace_dir}")
    prices = load_price_series(ws)
    ```
-2. 使用 Step 4 的 P50 Forward EPS（T+1 或 T+2，与蒙特卡洛一致）
+2. 使用 Step 4 的 P50 Forward EPS（T+1 或 T+2，与蒙特卡洛一致）；如果能获得历史 point-in-time forward EPS，必须传入 `forward_eps_series`
 3. 运行 forward_pe_band 计算：
    ```python
-   pe_band = forward_pe_band(prices, forward_eps=p50_eps, window_weeks=260)
+   pe_band = forward_pe_band(prices, forward_eps=p50_eps, forward_eps_series=forward_eps_series_if_available, window_weeks=260)
    ```
 4. 生成 PE Band 图表：
    ```python
@@ -255,6 +326,7 @@ brief = tracker.generate_update_brief()
    - **P25-P50**：合理偏低（有上行空间）
    - **P50-P75**：合理偏高（需基本面催化支撑）
    - **高于 P75**：显著高估（需极强成长性或稀缺性溢价论证，与 Step 4c 交叉验证）
+7. 如果缺少历史 point-in-time forward EPS，PE Band 只能称为 constant-EPS price band proxy，不得称为真实历史 Forward PE 分位。
 
 ### Step 5: RRR 估算与交易策略
 

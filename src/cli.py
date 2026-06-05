@@ -45,7 +45,10 @@ def cmd_fetch(args):
                         print(f"Saved: {path}")
                     else:
                         path = output_dir / f"{name}_{key}.json"
-                        path.write_text(json.dumps(val if not hasattr(val, "__dict__") else str(val), default=str, indent=2))
+                        path.write_text(
+                            json.dumps(val if not hasattr(val, "__dict__") else str(val), default=str, indent=2),
+                            encoding="utf-8",
+                        )
                         print(f"Saved: {path}")
             elif hasattr(result.data, "to_csv"):
                 path = output_dir / f"{name}.csv"
@@ -282,6 +285,12 @@ def cmd_consensus(args):
 def cmd_materials(args):
     from src.analysis.material_tracker import MaterialTracker
 
+    def _arg(name: str, default=None):
+        value = getattr(args, name, default)
+        if hasattr(value, "mock_calls"):
+            return default
+        return value
+
     tracker = MaterialTracker(args.workspace)
     action = args.action
 
@@ -307,6 +316,9 @@ def cmd_materials(args):
             pages=int(args.pages) if args.pages else None,
             language=args.language or "",
             notes=args.notes or "",
+            source_url=_arg("url", "") or "",
+            source_kind=_arg("source_kind", "") or "",
+            is_complete_report=True if _arg("complete_report", False) is True else None,
         )
         print(f"Document recorded: {doc['id']}")
         print(json.dumps(doc, ensure_ascii=False, indent=2, default=str))
@@ -329,9 +341,32 @@ def cmd_materials(args):
         print(f"Extraction recorded: {ext['id']}")
         print(json.dumps(ext, ensure_ascii=False, indent=2, default=str))
 
+    elif action == "read-attempt":
+        doc = tracker.record_read_attempt(
+            document_ref=args.document,
+            status=args.status,
+            method=_arg("method", "pdf_text_extract") or "pdf_text_extract",
+            error=_arg("error", "") or "",
+            max_attempts=int(_arg("max_attempts", 2) or 2),
+            notes=args.notes or "",
+        )
+        print(f"Read attempt recorded: {doc['id']}")
+        print(json.dumps(doc, ensure_ascii=False, indent=2, default=str))
+
+    elif action == "web-fallback":
+        doc = tracker.record_web_fallback(
+            document_ref=args.document,
+            url=_arg("url", ""),
+            source_kind=_arg("source_kind", "official_complete_report") or "official_complete_report",
+            is_complete_report=bool(_arg("complete_report", False)),
+            notes=args.notes or "",
+        )
+        print(f"Web fallback recorded: {doc['id']}")
+        print(json.dumps(doc, ensure_ascii=False, indent=2, default=str))
+
     else:
         print(f"Unknown action: {action}")
-        print("Available: snapshot, brief, index, add-doc, add-extract")
+        print("Available: snapshot, brief, index, add-doc, add-extract, read-attempt, web-fallback")
 
 
 def cmd_knowledge(args):
@@ -385,9 +420,10 @@ def cmd_knowledge(args):
 
 def cmd_report(args):
     from src.report.generator import generate_report_html
+    from src.analysis._base import resolve_workspace_path
 
     workspace = args.workspace
-    ws_path = WORKSPACES_DIR / workspace
+    ws_path = resolve_workspace_path(workspace)
 
     if not ws_path.exists():
         print(f"Error: Workspace not found: {ws_path}")
@@ -402,6 +438,117 @@ def cmd_report(args):
         company_name=company_name,
     )
     print(f"HTML report generated: {output}")
+
+
+def cmd_validate_step4(args):
+    """Validate Step 4 artifacts before Monte Carlo."""
+    from src.analysis.step4_validate import validate_step4_with_guard
+
+    workspace = args.workspace
+    ws_path = Path(workspace)
+    if not ws_path.is_absolute():
+        ws_path = WORKSPACES_DIR / workspace
+
+    step4_path = ws_path / "step4_quantitative_model.md"
+    result = validate_step4_with_guard(
+        step4_path,
+        max_attempts=int(args.max_attempts or 2),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    if not result.get("passed"):
+        sys.exit(1)
+
+
+def cmd_validate_materials(args):
+    """Validate structured source-material coverage."""
+    from src.analysis.material_tracker import MaterialTracker
+
+    required = [t.strip() for t in args.required.split(",")] if args.required else None
+    tracker = MaterialTracker(args.workspace)
+    result = tracker.validate_coverage(
+        required_extraction_types=required,
+        require_annual_mda=not args.no_annual_mda,
+        require_broker_assumptions=args.require_broker,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    if not result.get("passed"):
+        sys.exit(1)
+
+
+def cmd_model(args):
+    """Generate formula-linked forecast model artifacts."""
+    from src.analysis.financial_model import generate_financial_model_artifacts
+    from src.analysis.step4_validate import validate_step4_with_guard
+
+    workspace = args.workspace
+    ws_path = Path(workspace)
+    if not ws_path.is_absolute():
+        ws_path = WORKSPACES_DIR / workspace
+
+    validation = validate_step4_with_guard(
+        ws_path / "step4_quantitative_model.md",
+        max_attempts=int(args.max_attempts or 2),
+    )
+    if not validation.get("passed"):
+        print(json.dumps({
+            "error": "Step 4 validation failed. Forecast model generation blocked.",
+            "validation": validation,
+        }, ensure_ascii=False, indent=2, default=str))
+        sys.exit(1)
+
+    artifacts = generate_financial_model_artifacts(args.workspace, ticker=args.ticker or args.workspace)
+    print(json.dumps({
+        "json_path": str(artifacts["json_path"]),
+        "html_path": str(artifacts["html_path"]),
+    }, ensure_ascii=False, indent=2))
+
+
+def cmd_workflow(args):
+    """Manage sequential Step 0-7 workflow state."""
+    from src.analysis.research_workflow import ResearchWorkflow
+
+    wf = ResearchWorkflow(args.workspace)
+    action = args.action
+
+    if action == "status":
+        result = wf.snapshot()
+    elif action == "sync":
+        result = wf.sync_from_files()
+    elif action == "start":
+        if args.step is None:
+            result = {"error": "--step is required for workflow start"}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        result = wf.start_step(int(args.step), force=args.force)
+    elif action == "complete":
+        if args.step is None:
+            result = {"error": "--step is required for workflow complete"}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        result = wf.complete_step(
+            int(args.step),
+            artifact=args.artifact,
+            validation_summary=args.summary or "",
+            force=args.force,
+        )
+    elif action == "block":
+        if args.step is None:
+            result = {"error": "--step is required for workflow block"}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        result = wf.block_step(int(args.step), reason=args.reason or "")
+    elif action == "can-start":
+        if args.step is None:
+            result = {"error": "--step is required for workflow can-start"}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        result = wf.can_start(int(args.step))
+    else:
+        result = {"error": f"Unknown workflow action: {action}"}
+
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    if result.get("allowed") is False or result.get("started") is False or result.get("completed") is False or (isinstance(result.get("error"), str) and result["error"]):
+        sys.exit(1)
 
 
 # ── Helper functions ──────────────────────────────────────────────
@@ -459,11 +606,13 @@ def _auto_calculate_valuation(results, output_dir):
         eps_fwd = val_data.get("eps_forward")
 
         # Resolve income DataFrame (yfinance uses "financials", akshare uses "income")
-        income = fin_data.get("financials") or fin_data.get("income")
+        income = fin_data.get("financials")
+        if income is None:
+            income = fin_data.get("income")
         balance = fin_data.get("balance_sheet")
         cashflow = fin_data.get("cashflow")
 
-        if not price or not shares or income is None or balance is None:
+        if price is None or shares is None or income is None or balance is None:
             print("\nSkipping auto-calculation: missing price/shares/income/balance")
             return
 
@@ -480,7 +629,8 @@ def _auto_calculate_valuation(results, output_dir):
         # Save calculated valuation
         calc_path = output_dir / "calculated_valuation.json"
         calc_path.write_text(
-            json.dumps(_make_serializable(calculated), indent=2, ensure_ascii=False)
+            json.dumps(_make_serializable(calculated), indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
         print(f"\nSaved calculated valuation: {calc_path}")
 
@@ -494,7 +644,8 @@ def _auto_calculate_valuation(results, output_dir):
         raw_inputs = {k: val_data[k] for k in raw_keys if k in val_data and val_data[k] is not None}
         raw_path = output_dir / "valuation_raw_inputs.json"
         raw_path.write_text(
-            json.dumps(raw_inputs, default=str, indent=2, ensure_ascii=False)
+            json.dumps(raw_inputs, default=str, indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
         print(f"Saved raw valuation inputs: {raw_path}")
 
@@ -527,7 +678,8 @@ def cmd_fetch_peers(args):
                                 val.to_csv(peer_dir / f"{name}_{key}.csv")
                             else:
                                 (peer_dir / f"{name}_{key}.json").write_text(
-                                    json.dumps(val, default=str, indent=2)
+                                    json.dumps(val, default=str, indent=2),
+                                    encoding="utf-8",
                                 )
                     elif hasattr(result.data, "to_csv"):
                         result.data.to_csv(peer_dir / f"{name}.csv")
@@ -639,7 +791,15 @@ def main():
     # ── Source material commands ─────────────────────
     p_materials = subparsers.add_parser("materials", help="Track source material extraction from reports/PDFs")
     p_materials.add_argument("workspace", help="Workspace directory name")
-    p_materials.add_argument("action", choices=["snapshot", "brief", "index", "add-doc", "add-extract"])
+    p_materials.add_argument("action", choices=[
+        "snapshot",
+        "brief",
+        "index",
+        "add-doc",
+        "add-extract",
+        "read-attempt",
+        "web-fallback",
+    ])
     p_materials.add_argument("--focus", help="Brief focus extraction type")
     p_materials.add_argument("--file", help="Source filename for add-doc")
     p_materials.add_argument("--doc-type", help="annual_report/broker_report/etc.")
@@ -661,6 +821,13 @@ def main():
     p_materials.add_argument("--tags", help="Comma-separated tags")
     p_materials.add_argument("--quote", help="Short direct quote or excerpt")
     p_materials.add_argument("--notes", help="Notes")
+    p_materials.add_argument("--status", help="Read attempt status: success/failed/encoding_error/etc.")
+    p_materials.add_argument("--method", help="PDF read method used")
+    p_materials.add_argument("--error", help="Read attempt error message")
+    p_materials.add_argument("--max-attempts", help="Maximum failed PDF read attempts before fallback is required")
+    p_materials.add_argument("--url", help="Official complete-report source URL")
+    p_materials.add_argument("--source-kind", help="official_ir/exchange_filing/company_website/etc.; not news")
+    p_materials.add_argument("--complete-report", action="store_true", help="Mark source as a complete annual/interim report")
     p_materials.set_defaults(func=cmd_materials)
 
     # ── Knowledge graph commands ─────────────────────
@@ -684,6 +851,41 @@ def main():
     p_report.add_argument("--ticker", "-t", help="Ticker symbol (default: workspace name)")
     p_report.add_argument("--name", "-n", help="Company display name")
     p_report.set_defaults(func=cmd_report)
+
+    # ── Step validation commands ────────────────────
+    p_validate_step4 = subparsers.add_parser(
+        "validate-step4",
+        help="Validate Step 4 structured assumptions before Monte Carlo",
+    )
+    p_validate_step4.add_argument("workspace", help="Workspace directory name or path")
+    p_validate_step4.add_argument("--max-attempts", type=int, default=2, help="Failed validation attempts before writing step4_blockers.md")
+    p_validate_step4.set_defaults(func=cmd_validate_step4)
+
+    p_validate_materials = subparsers.add_parser(
+        "validate-materials",
+        help="Validate source material extraction coverage",
+    )
+    p_validate_materials.add_argument("workspace", help="Workspace directory name or path")
+    p_validate_materials.add_argument("--required", help="Comma-separated required extraction types")
+    p_validate_materials.add_argument("--no-annual-mda", action="store_true", help="Do not require annual/interim MD&A coverage")
+    p_validate_materials.add_argument("--require-broker", action="store_true", help="Require broker_assumption if broker PDFs are indexed")
+    p_validate_materials.set_defaults(func=cmd_validate_materials)
+
+    p_model = subparsers.add_parser("model", help="Generate forecast_model.json/html from Step 4 assumptions")
+    p_model.add_argument("workspace", help="Workspace directory name or path")
+    p_model.add_argument("--ticker", "-t", help="Ticker symbol")
+    p_model.add_argument("--max-attempts", type=int, default=2, help="Failed validation attempts before writing step4_blockers.md")
+    p_model.set_defaults(func=cmd_model)
+
+    p_workflow = subparsers.add_parser("workflow", help="Guard sequential Step 0-7 research workflow")
+    p_workflow.add_argument("workspace", help="Workspace directory name or path")
+    p_workflow.add_argument("action", choices=["status", "sync", "can-start", "start", "complete", "block"])
+    p_workflow.add_argument("--step", type=int, help="Step number 0-7")
+    p_workflow.add_argument("--artifact", help="Step artifact filename for complete")
+    p_workflow.add_argument("--summary", help="Validation or completion summary")
+    p_workflow.add_argument("--reason", help="Block reason")
+    p_workflow.add_argument("--force", action="store_true", help="Override workflow guard intentionally")
+    p_workflow.set_defaults(func=cmd_workflow)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

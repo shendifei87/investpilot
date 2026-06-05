@@ -5,11 +5,17 @@ A deep fundamental investment research harness built on Claude Code. Seeks signi
 ## Features
 
 - **Quick Triage Gate + 7-Step Deep Research Pipeline** — PASS / WATCH / FULL_RESEARCH screening before full research
-- **Monte Carlo Simulation** — t-Copula dependency structure + Kelly criterion position sizing
+- **Sequential Workflow Guard** — State machine enforces step-by-step progression with dependency checks, blocking, and artifact tracking
+- **Formula-Linked Financial Forecast Model** — Three-statement model (income, cash flow, balance sheet) with segment-level revenue build, valuation bridge, and built-in consistency checks
+- **Step 4 Structured Assumptions + Validation** — Pre-flight 15-check validator with guard state, retry limits, and blocker escalation before Monte Carlo simulation
+- **Probabilistic Simulation** — t-Copula dependency structure + Kelly criterion position sizing + assumption consistency verification
+- **Forward PE Band** — Point-in-time vs constant-EPS proxy distinction with 5-year historical percentile bands
 - **Multi-Market Support** — A-share, Hong Kong, US stocks (data source: Tushare Pro)
 - **Expectation Gap Driven** — 4-dimension Edge classification scoring + catalyst time-decay tracking
 - **Knowledge Graph** — Cross-stock research experience accumulation and pattern matching
-- **Self-Contained HTML Reports** — Inline CSS + base64-embedded charts
+- **PDF Read Failure Guard** — Material coverage validation with web fallback; rejects news/summaries as annual report substitutes
+- **Self-Contained HTML Reports** — Inline CSS + base64-embedded charts with collapsible step navigation and metric cards
+- **Web Dashboard** — Real-time workspace status, file upload, step content retrieval, and Bearer token auth
 
 ## Installation
 
@@ -78,6 +84,10 @@ See [CLAUDE.md](CLAUDE.md) for the full workflow details.
 | `fetch <ticker>` | Fetch data into workspace |
 | `fetch-peers <ticker>` | Fetch peer company data |
 | `analyze <ticker>` | Technical analysis (MA / RSI / MACD) |
+| `workflow <workspace> <action>` | Manage sequential research workflow state (start / complete / block / status) |
+| `validate-step4 <workspace>` | Run Step 4 pre-flight validation with guard state |
+| `validate-materials <workspace>` | Verify material coverage (annual report + MD&A extraction) |
+| `model <workspace>` | Generate formula-linked financial forecast model (JSON + HTML) |
 | `thesis <action>` | Manage investment thesis lifecycle |
 | `catalyst <action>` | Track catalysts with time decay |
 | `consensus <action>` | Track market consensus, revisions, and expectation gaps |
@@ -97,9 +107,12 @@ investpilot/
 │   ├── storage.py         # Atomic JSON storage (crash-safe)
 │   ├── analysis/          # Analysis engine
 │   │   ├── financial.py   # Financial analysis (PE/PB/PS/EV, earnings quality)
-│   │   ├── monte_carlo.py # Monte Carlo simulation + Kelly criterion
+│   │   ├── monte_carlo.py # Probabilistic simulation + Kelly criterion
 │   │   ├── valuation.py   # DCF / Reverse DCF / Forward PE Band
 │   │   ├── step4_validate.py  # Step 4 pre-flight validator (15 checks)
+│   │   ├── step4_schema.py    # Step 4 structured assumption schema + persistence
+│   │   ├── financial_model.py # Formula-linked three-statement forecast model
+│   │   ├── research_workflow.py # Sequential workflow state machine
 │   │   ├── thesis_tracker.py  # Thesis lifecycle management
 │   │   ├── catalyst_tracker.py # Catalyst tracking + time decay
 │   │   ├── consensus_tracker.py # Structured consensus + expectation gap tracking
@@ -112,7 +125,7 @@ investpilot/
 │   │   ├── us_fetcher.py      # US (Tushare)
 │   │   └── tushare_client.py  # Unified Tushare API client
 │   └── report/            # Report generation (HTML + Markdown)
-├── tests/                 # Test suite (172 tests)
+├── tests/                 # Test suite (514 tests)
 └── workspaces/            # Per-stock research data and outputs
 ```
 
