@@ -11,3 +11,5 @@ workspaces/
 .venv/
 .DS_Store
 .claude/
+node_modules/
+web/dist/

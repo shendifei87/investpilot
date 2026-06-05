@@ -1,0 +1,10 @@
+import { Hono } from "hono";
+import { WORKSPACES_DIR } from "../config.js";
+
+const health = new Hono();
+
+health.get("/health", (c) => {
+  return c.json({ status: "ok", workspaces: WORKSPACES_DIR });
+});
+
+export default health;

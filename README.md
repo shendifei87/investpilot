@@ -15,13 +15,16 @@ A deep fundamental investment research harness built on Claude Code. Seeks signi
 - **Knowledge Graph** — Cross-stock research experience accumulation and pattern matching
 - **PDF Read Failure Guard** — Material coverage validation with web fallback; rejects news/summaries as annual report substitutes
 - **Self-Contained HTML Reports** — Inline CSS + base64-embedded charts with collapsible step navigation and metric cards
-- **Web Dashboard** — Real-time workspace status, file upload, step content retrieval, and Bearer token auth
+- **Web Dashboard** — TypeScript (Hono) server with real-time workspace status, file upload, step content retrieval, and Bearer token auth
 
 ## Installation
 
 ```bash
 # Requires Python 3.9+
 pip install -e ".[dev]"
+
+# Web dashboard (TypeScript)
+cd web && npm install
 ```
 
 Or install dependencies manually:
@@ -76,6 +79,20 @@ Quick Triage writes `workspaces/AAPL/step0_quick_triage.md` and returns one of:
 
 See [CLAUDE.md](CLAUDE.md) for the full workflow details.
 
+### 4. Start the Web Dashboard
+
+```bash
+cd web
+npm start            # Production: http://localhost:8080
+npm run dev          # Dev mode with auto-reload
+
+# With authentication
+INVESTPILOT_TOKEN="your_token" npm start
+
+# Custom port
+npm start -- 3000
+```
+
 ## CLI Commands
 
 | Command | Description |
@@ -102,6 +119,17 @@ investpilot/
 ├── CLAUDE.md              # Master prompt (7-step workflow definition)
 ├── config/                # Configuration (market rules, thresholds, weights)
 ├── prompts/               # 7-step prompt templates
+├── web/                   # TypeScript web layer (Hono)
+│   ├── src/
+│   │   ├── index.ts       # Entry point — Hono app + @hono/node-server
+│   │   ├── config.ts      # Constants, env vars, step definitions
+│   │   ├── routes/        # API route handlers
+│   │   ├── middleware/    # Auth, CORS, upload limit
+│   │   └── services/     # Workspace status, multipart parsing
+│   ├── public/
+│   │   └── index.html     # Dashboard SPA
+│   ├── tests/             # Vitest test suite (44 tests)
+│   └── package.json
 ├── src/
 │   ├── cli.py             # CLI entry point
 │   ├── storage.py         # Atomic JSON storage (crash-safe)
@@ -125,14 +153,18 @@ investpilot/
 │   │   ├── us_fetcher.py      # US (Tushare)
 │   │   └── tushare_client.py  # Unified Tushare API client
 │   └── report/            # Report generation (HTML + Markdown)
-├── tests/                 # Test suite (514 tests)
+├── tests/                 # Python test suite (44 tests)
 └── workspaces/            # Per-stock research data and outputs
 ```
 
 ## Running Tests
 
 ```bash
+# Python tests (analysis engine, CLI, data fetchers)
 python -m pytest tests/ -v
+
+# TypeScript tests (web layer)
+cd web && npm test
 ```
 
 ## Market Rules
