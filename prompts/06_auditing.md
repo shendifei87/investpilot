@@ -91,6 +91,27 @@ Check items:
 
 If no historical calibration data exists, note: "No historical calibration data available; reliability pending verification."
 
+### 6.5 Contrarian Check Coverage Validation
+
+Verify all six steps have contrarian checks:
+
+```python
+from src.analysis.step4_validate import validate_contrarian_checks
+
+cc_result = validate_contrarian_checks(f"workspaces/{workspace_dir}")
+# Returns: {"passed": bool, "coverage": [...], "missing": [...]}
+```
+
+Ensure:
+- Step 1 contrarian check (business outlook) — ✅ or ⚠️
+- Step 2 contrarian check (moat erosion) — ✅ or ⚠️
+- Step 3 contrarian check (consensus validation) — ✅ or ⚠️
+- Step 4 contrarian check (P50 → P10 scenarios) — ✅ or ⚠️
+- Step 5 contrarian check (RRR < 1.0 conditions) — ✅ or ⚠️
+- Step 6 Red Team analysis — ✅ or ⚠️
+
+Any missing contrarian check is an audit finding that must be flagged in the Final Rating.
+
 ## Final Rating
 
 **Rating criteria**:

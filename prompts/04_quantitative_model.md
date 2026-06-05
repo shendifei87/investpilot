@@ -567,3 +567,80 @@ For **each key variable** in the assumption matrix, answer:
 **Assumption consistency self-check**:
 1. Is PE/PB P50 consistent with Step 2 moat rating?
 2. Is revenue growth P50 consistent with Step 1 segment analysis (variance >5pp needs explanation)?
+
+---
+
+## Appendix A: Full Simulation Code
+
+After user confirms the assumption matrix, lock the reviewed assumptions and run the simulation:
+
+```python
+from src.analysis.monte_carlo import (
+    fit_distribution_from_percentiles,
+    save_reviewed_assumptions,
+    verify_assumption_consistency,
+    build_correlation_matrix,
+    run_monte_carlo,
+    calc_rrr,
+    save_calibration,
+)
+from src.analysis.valuation import reverse_dcf, dcf_model
+
+# 1. Lock reviewed assumptions (must match user-confirmed matrix exactly)
+save_reviewed_assumptions(workspace_dir, {
+    "rev_growth": {"p10": 0.05, "p50": 0.15, "p90": 0.25},
+    "gross_margin": {"p10": 0.30, "p50": 0.42, "p90": 0.50},
+    "pe": {"p10": 40, "p50": 60, "p90": 80},
+    # ... all variables from assumption_matrix
+})
+
+# 2. Build distributions from percentiles (WLS fitting, auto-truncated at P1/P99)
+assumptions = {
+    "rev_growth": fit_distribution_from_percentiles({10: 0.05, 30: 0.10, 50: 0.15, 70: 0.20, 90: 0.25}),
+    "gross_margin": fit_distribution_from_percentiles({10: 0.30, 30: 0.36, 50: 0.42, 70: 0.46, 90: 0.50}),
+    "pe": fit_distribution_from_percentiles({10: 40, 50: 60, 90: 80}, "lognormal"),
+}
+
+# 3. Verify no post-review drift
+consistency = verify_assumption_consistency(workspace_dir, assumptions)
+assert consistency["passed"], consistency["summary"]
+
+# 4. Build correlation matrix (t-Copula dependency structure)
+corr_matrix, corr_warnings = build_correlation_matrix(
+    ["rev_growth", "gross_margin", "pe"],
+    [
+        ("rev_growth", "gross_margin", 0.7),
+        ("rev_growth", "pe", 0.6),
+        ("gross_margin", "pe", 0.3),
+    ],
+)
+
+# 5. Run Monte Carlo simulation
+result = run_monte_carlo(assumptions, pnl_model_fn, corr_matrix, copula_df=6)
+# result["target_price"] → distribution of target prices
+# result["percentiles"] → {10: ..., 25: ..., 50: ..., 75: ..., 90: ...}
+
+# 6. Calculate RRR and cross-validation
+rrr = calc_rrr(result["target_price"], current_price)
+rdcf = reverse_dcf(current_price, shares, base_fcf, wacc=0.08)
+dcf = dcf_model(fcf, growth_rate, wacc, terminal_growth, years, shares)
+
+# 7. Save calibration record for future accuracy tracking
+save_calibration(workspace_dir, ticker, predicted_eps, "2026E", "medium", percentiles)
+```
+
+### Distribution Type Reference
+
+| Variable Type | Distribution | Notes |
+|:--------------|:-------------|:------|
+| PE, PB, EV/EBITDA | `lognormal` | Right-skewed, bounded at zero |
+| Revenue growth, margins | `normal` | Can be negative |
+| Tax rate, expense ratio | `normal` | Truncated at [0, 1] |
+
+### t-Copula df Reference
+
+| Sector Type | `copula_df` | Rationale |
+|:------------|:-----------|:----------|
+| Default | 6 | Moderate tail dependency |
+| Semiconductors, cyclicals | 5 | Fatter tails, more co-movement |
+| Defensives, utilities | 8 | Thinner tails, less co-movement |

@@ -147,3 +147,26 @@ Quick Triage 只允许三种结论：
 “我是否只是因为一个有趣新闻或便宜表象而想深研？如果不做这只股票，机会成本是什么？”
 
 如果该问题揭示重大动机偏差，必须下调 Decision。
+
+## Appendix A: Pre-Research Brief
+
+Before starting Step 0, check for historical research that could inform the triage:
+
+```python
+from src.analysis.knowledge_graph import KnowledgeGraph
+
+kg = KnowledgeGraph()
+brief = kg.generate_research_brief(ticker, industry, themes)
+```
+
+If the workspace already has an open thesis (`thesis.json` exists and status is `open`), enter **incremental update mode** instead of a fresh triage:
+
+```python
+from src.analysis.thesis_tracker import ThesisTracker
+
+tracker = ThesisTracker(workspace_dir)
+brief = tracker.generate_update_brief()
+# Returns: thesis summary, hypothesis status, catalyst decay, time since last update
+```
+
+In incremental update mode, only update what changed (new data, new catalysts, hypothesis validation). Do not redo the full 7-step pipeline unless the thesis has been invalidated.
