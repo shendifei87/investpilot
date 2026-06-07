@@ -2,10 +2,11 @@
 """InvestPilot CLI — data fetching and analysis tools."""
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+logger = logging.getLogger(__name__)
 
 from config.ticker_rules import detect_market, normalize_ticker
 from src.data.market_detector import get_fetcher
@@ -34,7 +35,7 @@ def cmd_fetch(args):
         print(f"Success: {result.success}")
         if result.warnings:
             for w in result.warnings:
-                print(f"Warning: {w}")
+                logger.warning(w)
 
         if result.data is not None:
             if isinstance(result.data, dict):
@@ -86,13 +87,7 @@ def cmd_analyze(args):
             technical.to_csv(output_dir / "technical_indicators.csv")
             print(f"Technical analysis saved to {output_dir / 'technical_indicators.csv'}")
     else:
-        print(f"No price data found at {price_file}")
-
-    # Load financial statements
-    for stmt_key in ["financials_income", "financials_balance_sheet"]:
-        stmt_file = input_dir / f"{stmt_key}.csv"
-        if stmt_file.exists():
-            print(f"Found {stmt_key}, analysis would run here")
+        logger.warning("No price data found at %s", price_file)
 
     print(f"Analysis output: {output_dir}")
 
@@ -285,12 +280,6 @@ def cmd_consensus(args):
 def cmd_materials(args):
     from src.analysis.material_tracker import MaterialTracker
 
-    def _arg(name: str, default=None):
-        value = getattr(args, name, default)
-        if hasattr(value, "mock_calls"):
-            return default
-        return value
-
     tracker = MaterialTracker(args.workspace)
     action = args.action
 
@@ -316,9 +305,9 @@ def cmd_materials(args):
             pages=int(args.pages) if args.pages else None,
             language=args.language or "",
             notes=args.notes or "",
-            source_url=_arg("url", "") or "",
-            source_kind=_arg("source_kind", "") or "",
-            is_complete_report=True if _arg("complete_report", False) is True else None,
+            source_url=getattr(args, "url", "") or "",
+            source_kind=getattr(args, "source_kind", "") or "",
+            is_complete_report=True if getattr(args, "complete_report", False) is True else None,
         )
         print(f"Document recorded: {doc['id']}")
         print(json.dumps(doc, ensure_ascii=False, indent=2, default=str))
@@ -345,9 +334,9 @@ def cmd_materials(args):
         doc = tracker.record_read_attempt(
             document_ref=args.document,
             status=args.status,
-            method=_arg("method", "pdf_text_extract") or "pdf_text_extract",
-            error=_arg("error", "") or "",
-            max_attempts=int(_arg("max_attempts", 2) or 2),
+            method=getattr(args, "method", "pdf_text_extract") or "pdf_text_extract",
+            error=getattr(args, "error", "") or "",
+            max_attempts=int(getattr(args, "max_attempts", 2) or 2),
             notes=args.notes or "",
         )
         print(f"Read attempt recorded: {doc['id']}")
@@ -356,9 +345,9 @@ def cmd_materials(args):
     elif action == "web-fallback":
         doc = tracker.record_web_fallback(
             document_ref=args.document,
-            url=_arg("url", ""),
-            source_kind=_arg("source_kind", "official_complete_report") or "official_complete_report",
-            is_complete_report=bool(_arg("complete_report", False)),
+            url=getattr(args, "url", ""),
+            source_kind=getattr(args, "source_kind", "official_complete_report") or "official_complete_report",
+            is_complete_report=bool(getattr(args, "complete_report", False)),
             notes=args.notes or "",
         )
         print(f"Web fallback recorded: {doc['id']}")
@@ -420,16 +409,17 @@ def cmd_knowledge(args):
 
 def cmd_report(args):
     from src.report.generator import generate_report_html
-    from src.analysis._base import resolve_workspace_path
 
-    workspace = args.workspace
-    ws_path = resolve_workspace_path(workspace)
+    ws_path = _resolve_workspace(args.workspace)
 
     if not ws_path.exists():
-        print(f"Error: Workspace not found: {ws_path}")
+        logger.error("Workspace not found: %s", ws_path)
         sys.exit(1)
 
-    ticker = args.ticker or workspace
+    # Extract clean ticker name: strip "workspaces/" prefix and any path separators
+    raw_ticker = args.ticker or args.workspace
+    ticker = raw_ticker.replace("workspaces/", "").replace("workspaces\\", "")
+    ticker = ticker.rstrip("/\\")
     company_name = args.name or ""
 
     output = generate_report_html(
@@ -441,15 +431,12 @@ def cmd_report(args):
 
 
 def cmd_validate_step4(args):
-    """Validate Step 4 artifacts before Monte Carlo."""
+    """Validate Step 4 assumptions before model build or Monte Carlo."""
     from src.analysis.step4_validate import validate_step4_with_guard
 
-    workspace = args.workspace
-    ws_path = Path(workspace)
-    if not ws_path.is_absolute():
-        ws_path = WORKSPACES_DIR / workspace
+    ws_path = _resolve_workspace(args.workspace)
 
-    step4_path = ws_path / "step4_quantitative_model.md"
+    step4_path = _resolve_step4_validation_path(ws_path)
     result = validate_step4_with_guard(
         step4_path,
         max_attempts=int(args.max_attempts or 2),
@@ -480,18 +467,15 @@ def cmd_model(args):
     from src.analysis.financial_model import generate_financial_model_artifacts
     from src.analysis.step4_validate import validate_step4_with_guard
 
-    workspace = args.workspace
-    ws_path = Path(workspace)
-    if not ws_path.is_absolute():
-        ws_path = WORKSPACES_DIR / workspace
+    ws_path = _resolve_workspace(args.workspace)
 
     validation = validate_step4_with_guard(
-        ws_path / "step4_quantitative_model.md",
+        _resolve_step4_validation_path(ws_path),
         max_attempts=int(args.max_attempts or 2),
     )
     if not validation.get("passed"):
         print(json.dumps({
-            "error": "Step 4 validation failed. Forecast model generation blocked.",
+            "error": "Step 4 assumption validation failed. Forecast model generation blocked.",
             "validation": validation,
         }, ensure_ascii=False, indent=2, default=str))
         sys.exit(1)
@@ -503,8 +487,20 @@ def cmd_model(args):
     }, ensure_ascii=False, indent=2))
 
 
+def cmd_excel_model(args):
+    """Generate professional three-statement Excel model from forecast_model.json."""
+    from src.analysis.excel_model import generate_excel_model
+
+    ws_path = _resolve_workspace(args.workspace)
+
+    output_path = generate_excel_model(workspace, ticker=args.ticker or "")
+    print(json.dumps({
+        "excel_path": str(output_path),
+    }, ensure_ascii=False, indent=2))
+
+
 def cmd_workflow(args):
-    """Manage sequential Step 0-7 workflow state."""
+    """Manage sequential research workflow state."""
     from src.analysis.research_workflow import ResearchWorkflow
 
     wf = ResearchWorkflow(args.workspace)
@@ -519,14 +515,14 @@ def cmd_workflow(args):
             result = {"error": "--step is required for workflow start"}
             print(json.dumps(result, ensure_ascii=False, indent=2))
             sys.exit(1)
-        result = wf.start_step(int(args.step), force=args.force)
+        result = wf.start_step(args.step, force=args.force)
     elif action == "complete":
         if args.step is None:
             result = {"error": "--step is required for workflow complete"}
             print(json.dumps(result, ensure_ascii=False, indent=2))
             sys.exit(1)
         result = wf.complete_step(
-            int(args.step),
+            args.step,
             artifact=args.artifact,
             validation_summary=args.summary or "",
             force=args.force,
@@ -536,45 +532,45 @@ def cmd_workflow(args):
             result = {"error": "--step is required for workflow block"}
             print(json.dumps(result, ensure_ascii=False, indent=2))
             sys.exit(1)
-        result = wf.block_step(int(args.step), reason=args.reason or "")
+        result = wf.block_step(args.step, reason=args.reason or "")
     elif action == "can-start":
         if args.step is None:
             result = {"error": "--step is required for workflow can-start"}
             print(json.dumps(result, ensure_ascii=False, indent=2))
             sys.exit(1)
-        result = wf.can_start(int(args.step))
+        result = wf.can_start(args.step)
     else:
         result = {"error": f"Unknown workflow action: {action}"}
 
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    if result.get("allowed") is False or result.get("started") is False or result.get("completed") is False or (isinstance(result.get("error"), str) and result["error"]):
+    should_exit = (
+        result.get("allowed") is False
+        or result.get("started") is False
+        or result.get("completed") is False
+        or bool(result.get("error"))
+    )
+    if should_exit:
         sys.exit(1)
 
 
 # ── Helper functions ──────────────────────────────────────────────
 
 
-def _make_serializable(obj):
-    """Convert dicts with non-JSON types (numpy, pandas) to JSON-safe types."""
-    import numpy as np
-    import pandas as pd
-    if isinstance(obj, dict):
-        return {k: _make_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_serializable(v) for v in obj]
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, pd.Series):
-        return obj.to_dict()
-    if isinstance(obj, pd.DataFrame):
-        return obj.to_dict()
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        return obj
-    return str(obj)
+def _resolve_workspace(workspace: str) -> Path:
+    """Resolve a workspace name or path to an absolute Path.
+
+    Handles both canonical names ("600584.SH") and prefixed paths
+    ("workspaces/600584.SH"). Absolute paths are preserved.
+    """
+    from src.analysis._base import resolve_workspace_path
+    return resolve_workspace_path(workspace)
+
+
+def _resolve_step4_validation_path(workspace: Path) -> Path:
+    """Return the canonical Step 4 artifact for assumption validation."""
+    from src.contracts import get_step_contract
+
+    return workspace / get_step_contract("4").primary_artifact
 
 
 def _auto_calculate_valuation(results, output_dir):
@@ -629,7 +625,7 @@ def _auto_calculate_valuation(results, output_dir):
         # Save calculated valuation
         calc_path = output_dir / "calculated_valuation.json"
         calc_path.write_text(
-            json.dumps(_make_serializable(calculated), indent=2, ensure_ascii=False),
+            json.dumps(calculated, indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
         )
         print(f"\nSaved calculated valuation: {calc_path}")
@@ -650,7 +646,7 @@ def _auto_calculate_valuation(results, output_dir):
         print(f"Saved raw valuation inputs: {raw_path}")
 
     except Exception as e:
-        print(f"\nWarning: Auto-calculation failed: {e}")
+        logger.warning("Auto-calculation failed: %s", e)
 
 
 def cmd_fetch_peers(args):
@@ -877,10 +873,15 @@ def main():
     p_model.add_argument("--max-attempts", type=int, default=2, help="Failed validation attempts before writing step4_blockers.md")
     p_model.set_defaults(func=cmd_model)
 
-    p_workflow = subparsers.add_parser("workflow", help="Guard sequential Step 0-7 research workflow")
+    p_excel = subparsers.add_parser("excel-model", help="Generate professional three-statement Excel from forecast_model.json")
+    p_excel.add_argument("workspace", help="Workspace directory name or path")
+    p_excel.add_argument("--ticker", "-t", help="Ticker symbol")
+    p_excel.set_defaults(func=cmd_excel_model)
+
+    p_workflow = subparsers.add_parser("workflow", help="Guard sequential research workflow")
     p_workflow.add_argument("workspace", help="Workspace directory name or path")
     p_workflow.add_argument("action", choices=["status", "sync", "can-start", "start", "complete", "block"])
-    p_workflow.add_argument("--step", type=int, help="Step number 0-7")
+    p_workflow.add_argument("--step", help="Step number: 0-9")
     p_workflow.add_argument("--artifact", help="Step artifact filename for complete")
     p_workflow.add_argument("--summary", help="Validation or completion summary")
     p_workflow.add_argument("--reason", help="Block reason")

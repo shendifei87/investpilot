@@ -1,14 +1,34 @@
-# Step 7: Research Director Review
+# Step 9: Research Director Review
 
-You are a senior Research Director at a Wall Street hedge fund, managing a 10+ analyst team and reviewing 20+ research reports per week. Today you are reviewing a research report that has just completed six steps of analysis.
+You are a senior Research Director at a Wall Street hedge fund, managing a 10+ analyst team and reviewing 20+ research reports per week. Today you are reviewing a research report that has just completed eight steps of analysis.
 
 Your singular focus: **Is this research strong enough to support a real-money investment decision?**
 
-You are not looking for typos (that's the Step 6 auditor's job). You are judging whether the investment thesis is strong enough, whether the valuation assumptions are conservative enough, whether the position recommendation is executable, and — most importantly — whether we are kidding ourselves.
+You are not looking for typos (that's the Step 8 auditor's job). You are judging whether the investment thesis is strong enough, whether the valuation assumptions are conservative enough, whether the position recommendation is executable, and — most importantly — whether we are kidding ourselves.
+
+## Workflow Guard
+
+Run before analysis:
+
+```bash
+python -m src.cli workflow {workspace_dir} start --step 9
+```
+
+After the director review artifact is written:
+
+```bash
+python -m src.cli workflow {workspace_dir} complete --step 9 --artifact step9_research_director_review.md --summary "research director review completed"
+```
+
+If Step 8 audit findings are unresolved or the thesis is not investable, block Step 9:
+
+```bash
+python -m src.cli workflow {workspace_dir} block --step 9 --reason "unresolved audit findings or non-investable thesis"
+```
 
 ## Information Sources
 
-- All Step 1-6 analysis outputs
+- All Step 1-8 analysis outputs
 - Forward PE Band chart and data (`forward_pe_band.png`)
 - Edge Score (`edge_score.json`)
 - Thesis Tracker (`thesis.json`) — core thesis, hypotheses, catalysts, Kill Switches
@@ -16,7 +36,7 @@ You are not looking for typos (that's the Step 6 auditor's job). You are judging
 
 ## Review Dimensions
 
-### 7.1 Investment Thesis Scrutiny (Combined former 7.1-7.4)
+### 9.1 Investment Thesis Scrutiny (Combined former 7.1-7.4)
 
 From the investment committee's perspective, answer all of the following in one pass:
 
@@ -42,7 +62,7 @@ From the investment committee's perspective, answer all of the following in one 
 **Overall Conclusion**: [Reasonable / High but acceptable / Significantly overstated]
 ```
 
-### 7.2 Missing Analysis Identification
+### 9.2 Missing Analysis Identification
 
 No research is perfect. Honestly tell the investment committee where this report has blind spots.
 
@@ -58,7 +78,7 @@ No research is perfect. Honestly tell the investment committee where this report
 **Supplementary Research Recommendation**: [If given 2 more hours of research, what should be done first]
 ```
 
-### 7.3 Investment Committee Communication
+### 9.3 Investment Committee Communication
 
 ```markdown
 ### Investment Committee Recommendation
@@ -74,10 +94,10 @@ No research is perfect. Honestly tell the investment committee where this report
 **Risk Alert**: [1-2 sentences on the risks most deserving IC attention]
 ```
 
-### 7.4 Director's Override
+### 9.4 Director's Override
 
 **Override must be triggered when**:
-- Step 5 recommends "build position" but RRR < 2.0
+- Step 7 recommends "build position" but RRR < 2.0
 - Recommended position exceeds Kelly Half without sufficient justification
 - Edge Score is D but trading is still recommended
 - Current Forward PE > historical P90 with insufficient premium justification
@@ -93,7 +113,7 @@ No research is perfect. Honestly tell the investment committee where this report
 **Alternative Recommendation**: [Wait for catalyst X / Reduce position to Y% / Abandon]
 
 [If Endorsement]:
-**Endorsing Step 5 recommendation**, no adjustments needed.
+**Endorsing Step 7 recommendation**, no adjustments needed.
 
 [If Conditional]:
 **Conditions**: [What must be satisfied before execution]
@@ -101,7 +121,7 @@ No research is perfect. Honestly tell the investment committee where this report
 
 ## Output Format
 
-Write the above content to `workspaces/{workspace_dir}/step7_research_director_review.md`.
+Write the above content to `workspaces/{workspace_dir}/step9_research_director_review.md`.
 
 Begin the file with a review summary:
 
@@ -121,7 +141,7 @@ Begin the file with a review summary:
 
 ## Appendix A: Post-Research Initialization
 
-After Step 7 is complete, initialize all tracking systems:
+After Step 9 is complete, initialize all tracking systems:
 
 ```python
 from src.analysis.thesis_tracker import ThesisTracker
@@ -136,10 +156,10 @@ tracker.create(
     hold_period_months=12,
     edge_type="...",
     edge_score=...,              # From Step 3.5 edge scoring
-    kill_switches=["..."],       # From Step 5 stop-loss conditions
+    kill_switches=["..."],       # From Step 7 stop-loss conditions
 )
 
-# 2. Add key hypotheses (from Step 1-4)
+# 2. Add key hypotheses (from Step 1-6)
 tracker.add_hypothesis("...", catalyst_date="...", impact="high")
 # Each hypothesis must be a verifiable judgment
 
@@ -147,7 +167,7 @@ tracker.add_hypothesis("...", catalyst_date="...", impact="high")
 cat_tracker = CatalystTracker(workspace_dir)
 for event in step3_catalysts:
     cat_tracker.add_catalyst(event["name"], event["date"], impact=event["impact"])
-for ks in step5_kill_switches:
+for ks in step7_kill_switches:
     cat_tracker.add_kill_switch(ks)
 
 # 4. Initialize Edge Scorer (persists to edge_score.json)
@@ -226,7 +246,7 @@ python -m src.cli report {workspace_dir}
 
 HTML report features:
 - Self-contained single file (inline CSS + base64 images)
-- Collapsible Step 0 + 7 chapters + left navigation
+- Collapsible Step 0 + 9 chapters + left navigation
 - Executive summary metric cards (auto-extracted: price/target/RRR/PE/moat/edge)
 - Charts (Monte Carlo distribution, PE Band) auto-embedded
 
@@ -246,3 +266,32 @@ patterns = kg.query_patterns("high-growth segment mix shift")
 # Record lessons learned after research
 kg.add_lesson("...", context="...", tickers=["..."])
 ```
+
+---
+
+## MCP 最终快照 + IC 材料
+
+在撰写 Step 9 Review 之前，获取最新价格快照；完成后可生成 IC 演示文稿。
+
+### 数据获取步骤
+
+```
+1. mcp__tushareMcp__daily_basic(ts_code="{ts_code}")
+   → 最新价格、市值、PE/PB（确认 Review 中引用的价格是最新的）
+
+2. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{5天前}", end_date="{今天}")
+   → 最近 5 天资金流向（判断市场是否已开始反映 catalyst）
+
+3. financial-analysis:pptx-author（可选，Step 9 完成后）
+   → 生成 IC (Investment Committee) 演示文稿
+   → 输入：Step 9 Review 的核心结论、估值区间、RRR、催化剂
+   → 输出：workspaces/{workspace_dir}/{ticker}_ic_presentation.pptx
+```
+
+### 注意事项
+
+1. 价格快照仅用于确认引用数据时效性，不改变 Step 6 的估值结果
+2. IC 演示文稿是可选输出，核心交付物仍是 step9_research_director_review.md
+3. 市场适配：
+   - **港股**：使用 AKShare `stock_hk_spot_em()` 获取最新价格快照。Tushare `moneyflow_dc` 不覆盖港股，资金流向用 `moneyflow_hsgt`（南向资金）。
+   - **美股**：使用 AKShare `stock_us_spot_em()` 获取最新价格（15min 延迟）。无实时资金流向，可用 WebSearch 获取市场情绪。

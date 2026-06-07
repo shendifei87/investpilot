@@ -2,6 +2,26 @@
 
 You are a senior equity research analyst performing the first step of deep fundamental analysis.
 
+## Workflow Guard
+
+Run before analysis:
+
+```bash
+python -m src.cli workflow {workspace_dir} start --step 1
+```
+
+After material coverage validation passes and the artifact is written:
+
+```bash
+python -m src.cli workflow {workspace_dir} complete --step 1 --artifact step1_business_analysis.md --summary "business analysis completed"
+```
+
+If annual/interim report MD&A cannot be read from a local PDF or an official complete-report web source, block Step 1:
+
+```bash
+python -m src.cli workflow {workspace_dir} block --step 1 --reason "missing complete report MD&A coverage"
+```
+
 ## Information Sources
 
 You must synthesize information from the following three sources, without neglecting any:
@@ -205,3 +225,53 @@ After completing 1.1-1.7, answer these two core questions (max 150 words):
 
 1. **If my business outlook judgment is wrong, where am I most likely wrong?** — Identify 2-3 most likely errors, referencing specific sub-item numbers
 2. **What evidence would reverse my conclusion?** — List quantifiable, observable reversal trigger conditions
+
+---
+
+## MCP 结构化数据
+
+在撰写 Step 1 分析之前，调用以下 MCP 工具获取结构化业务数据，补充 PDF 年报提取和 CLI fetch。
+
+### 数据获取步骤
+
+```
+1. mcp__tushareMcp__fina_mainbz(ts_code="{ts_code}", type="P")
+   → 按产品分部收入（替代/补充年报手动提取）
+   → 用于 1.2 Revenue Segment Breakdown
+
+2. mcp__tushareMcp__fina_mainbz(ts_code="{ts_code}", type="D")
+   → 按地区分部收入
+   → 用于 1.4 Customer Analysis 地域分布
+
+3. mcp__tushareMcp__fina_mainbz(ts_code="{ts_code}", type="I")
+   → 按行业分部收入（如适用）
+
+4. mcp__tushareMcp__top10_holders(ts_code="{ts_code}")
+   → 前十大股东（名称、持股数量、比例）
+   → 用于 1.5 Management & Governance 内部人持股
+
+5. mcp__tushareMcp__top10_floatholders(ts_code="{ts_code}")
+   → 前十大流通股东
+
+6. mcp__tushareMcp__stk_holdernumber(ts_code="{ts_code}")
+   → 股东户数趋势（散户 vs 机构筹码集中度）
+
+7. mcp__tushareMcp__dividend(ts_code="{ts_code}")
+   → 分红历史（每股股利、除权除息日）
+   → 用于 1.5 资本配置能力评估
+
+8. mcp__tushareMcp__pledge_detail(ts_code="{ts_code}")
+   → 股权质押明细（质押比例高的股东 = 风险信号）
+
+9. mcp__web-reader__webReader(url="{公司 IR 页面 URL}")
+   → 当 PDF 读取失败时，从公司 IR 页面获取年报内容
+
+10. mcp__zai-mcp-server__extract_text_from_screenshot(image_source="{截图路径}")
+    → 研报截图/图表中的数据点 OCR 提取
+```
+
+### 注意事项
+
+1. `fina_mainbz` 返回分部数据，应与年报 MD&A 交叉验证，不一致时以年报为准
+2. 所有 MCP 数据均须通过 `MaterialTracker.record_extraction()` 记录来源
+3. 市场适配：A 股使用全部 API；港股用 `hk_basic`/`hk_income`/`hk_balancesheet`；美股用 `us_income`/`us_balancesheet`/`us_cashflow`

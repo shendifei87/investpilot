@@ -33,9 +33,9 @@ describe("getWorkspaceStatus", () => {
     const status = getWorkspaceStatus(wsDir);
     expect(status.status).toBe("empty");
     expect(status.completed).toBe(0);
-    expect(status.total).toBe(7);
+    expect(status.total).toBe(9);
     expect(status.triage_status).toBe("pending");
-    expect(status.steps[0].file).toBe("step0_quick_triage.md");
+    expect(status.steps["0"].file).toBe("step0_quick_triage.md");
     expect(status.has_materials).toBe(false);
   });
 
@@ -61,34 +61,55 @@ describe("getWorkspaceStatus", () => {
     const status = getWorkspaceStatus(wsDir);
     expect(status.status).toBe("in_progress");
     expect(status.completed).toBe(2);
-    expect(status.steps[1].status).toBe("completed");
-    expect(status.steps[3].status).toBe("pending");
+    expect(status.steps["1"].status).toBe("completed");
+    expect(status.steps["3"].status).toBe("pending");
   });
 
   it("tracks full completion", () => {
-    for (let n = 1; n <= 7; n++) {
+    for (const n of ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const) {
       fs.writeFileSync(path.join(wsDir, STEP_FILES[n]!), `# Step ${n}`);
     }
     const status = getWorkspaceStatus(wsDir);
     expect(status.status).toBe("completed");
-    expect(status.completed).toBe(7);
+    expect(status.completed).toBe(9);
   });
 
   it("triage only does not count as core completion", () => {
-    fs.writeFileSync(path.join(wsDir, STEP_FILES[0]!), "# Step 0");
+    fs.writeFileSync(path.join(wsDir, STEP_FILES["0"]!), "# Step 0");
     const status = getWorkspaceStatus(wsDir);
     expect(status.status).toBe("triaged");
     expect(status.completed).toBe(0);
-    expect(status.total).toBe(7);
+    expect(status.total).toBe(9);
     expect(status.triage_status).toBe("completed");
   });
 
   it("steps take priority over materials", () => {
     fs.writeFileSync(path.join(wsDir, "annual_report.pdf"), "%PDF-1.4 fake");
-    fs.writeFileSync(path.join(wsDir, STEP_FILES[1]!), "# Step 1");
+    fs.writeFileSync(path.join(wsDir, STEP_FILES["1"]!), "# Step 1");
     const status = getWorkspaceStatus(wsDir);
     expect(status.status).toBe("in_progress"); // not "ready"
     expect(status.completed).toBe(1);
+  });
+
+  it("does not count deprecated combined step 4 as completed substeps", () => {
+    fs.writeFileSync(path.join(wsDir, "step1_business_analysis.md"), "# Step 1");
+    fs.writeFileSync(path.join(wsDir, "step2_competitive_moat.md"), "# Step 2");
+    fs.writeFileSync(path.join(wsDir, "step3_marginal_changes.md"), "# Step 3");
+    fs.writeFileSync(path.join(wsDir, "step4_quantitative_model.md"), "# Deprecated Step 4");
+    const status = getWorkspaceStatus(wsDir);
+    expect(status.steps["4"].status).toBe("pending");
+    expect(status.steps["5"].status).toBe("pending");
+    expect(status.steps["6"].status).toBe("pending");
+    expect(status.completed).toBe(3);
+  });
+
+  it("does not count deprecated step 4 when prerequisites are missing", () => {
+    fs.writeFileSync(path.join(wsDir, "step4_quantitative_model.md"), "# Deprecated Step 4");
+    const status = getWorkspaceStatus(wsDir);
+    expect(status.steps["4"].status).toBe("pending");
+    expect(status.steps["5"].status).toBe("pending");
+    expect(status.steps["6"].status).toBe("pending");
+    expect(status.completed).toBe(0);
   });
 });
 

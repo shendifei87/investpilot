@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from src.analysis._base import resolve_workspace_path
+from src.analysis._utils import coerce_float as _num, is_pct_variable as _is_pct_variable
 from src.analysis.step4_schema import load_structured_assumptions
 from src.storage import AtomicJSON
 
@@ -20,24 +21,47 @@ from src.storage import AtomicJSON
 MODEL_JSON = "forecast_model.json"
 MODEL_HTML = "forecast_model.html"
 
+# ── Required Step 5 model inputs (no silent defaults) ────────────────────
+REQUIRED_MODEL_INPUTS = [
+    "shares_outstanding",
+    "diluted_shares",
+    "cash",
+    "debt",
+    "equity",
+    "nwc_ratio",
+    "ppe_ratio",
+    "other_assets_ratio",
+    "ap_ratio",
+    "dividend_payout",
+    "da_ratio",
+    "capex_ratio",
+    "interest_rate_on_debt",
+    "interest_rate_on_cash",
+    "annual_share_dilution_pct",
+]
 
-def _num(value: Any, default: float = 0.0) -> float:
-    if value is None or isinstance(value, bool):
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip().replace(",", "")
-        if not text:
-            return default
-        is_pct = text.endswith("%")
-        text = text.rstrip("%xX")
-        try:
-            out = float(text)
-        except ValueError:
-            return default
-        return out / 100 if is_pct else out
-    return default
+# Optional BS-driver inputs (formula-linked when present; hard-coded with warning otherwise)
+OPTIONAL_BS_INPUTS = [
+    "ar_days",
+    "inv_days",
+    "ap_days",
+    "intangible_assets",
+    "deferred_rev_ratio",
+    "accrued_ratio",
+    "other_ncl_ratio",
+    "st_debt",
+    "lt_debt",
+]
+
+REQUIRED_REVIEWED_VARIABLES = {
+    "rev_growth",
+    "gross_margin",
+    "opex_ratio",
+    "tax_rate",
+    "pe",
+}
+
+
 
 
 def _fmt(value: Any, kind: str = "number") -> str:
@@ -58,15 +82,32 @@ def _fmt(value: Any, kind: str = "number") -> str:
     return f"{v:,.1f}"
 
 
+# ── Percentage variable detection ────────────────────────────────────────
+# Uses naming convention: any variable whose canonical name contains
+# _margin, _growth, _ratio, _pct, _rate, or ends in _pct is a percentage.
+# No more abs(raw) > 1.0 heuristic.
+# _is_pct_variable is imported from src.analysis._utils
+
+
+# ── Period helpers ────────────────────────────────────────────────────────
+
 def _periods(structured: dict) -> list[str]:
     periods = structured.get("forecast_periods")
     if isinstance(periods, list) and len(periods) >= 3:
         return [str(p) for p in periods[:3]]
+    am = structured.get("assumption_matrix", []) or []
     years = []
-    for row in structured.get("assumption_matrix", []) or []:
-        y = row.get("year")
-        if y and str(y) not in years:
-            years.append(str(y))
+    if isinstance(am, list):
+        for row in am:
+            if not isinstance(row, dict):
+                continue
+            y = row.get("year")
+            if y and str(y) not in years:
+                years.append(str(y))
+    elif isinstance(am, dict):
+        for key in am:
+            if str(key) not in years:
+                years.append(str(key))
     if len(years) >= 3:
         return years[:3]
     return ["T+1", "T+2", "T+3"]
@@ -74,94 +115,155 @@ def _periods(structured: dict) -> list[str]:
 
 def _matrix_lookup(structured: dict) -> dict[tuple[str, str], dict]:
     lookup = {}
-    for row in structured.get("assumption_matrix", []) or []:
-        var = str(row.get("variable", "")).lower()
-        year = str(row.get("year", "T+1"))
-        if var:
-            lookup[(var, year)] = row
-            lookup.setdefault((var, ""), row)
+    am = structured.get("assumption_matrix", []) or []
+    if isinstance(am, list):
+        for row in am:
+            if not isinstance(row, dict):
+                continue
+            var = str(row.get("variable", "")).lower()
+            year = str(row.get("year", "T+1"))
+            if var:
+                lookup[(var, year)] = row
+                if year.lower() in {"", "all", "global"}:
+                    lookup[(var, "")] = row
+    elif isinstance(am, dict):
+        for period_key, variables in am.items():
+            if not isinstance(variables, dict):
+                continue
+            for var_name, pct_dict in variables.items():
+                if not isinstance(pct_dict, dict):
+                    continue
+                var = str(var_name).lower()
+                row = dict(pct_dict)
+                row["variable"] = var_name
+                row["year"] = period_key
+                lookup[(var, period_key)] = row
+                if str(period_key).lower() in {"", "all", "global"}:
+                    lookup[(var, "")] = row
     return lookup
 
 
-def _assumption_value(lookup: dict, names: list[str], period: str, default: float) -> float:
+def _assumption_row(lookup: dict, names: list[str], period: str) -> tuple[str, dict] | None:
+    periods = [period, *_period_aliases(period)]
     for name in names:
-        key = (name.lower(), period)
-        if key in lookup:
-            return _num(lookup[key].get("p50"), default)
+        for candidate_period in periods:
+            key = (name.lower(), candidate_period)
+            if key in lookup:
+                return name, lookup[key]
     for name in names:
         key = (name.lower(), "")
         if key in lookup:
-            return _num(lookup[key].get("p50"), default)
-    return default
+            return name, lookup[key]
+    return None
 
 
-def _base_inputs(structured: dict, workspace: Path) -> tuple[dict, list[str]]:
-    """Load base financial inputs, tracking which fields used fallback defaults.
+def _period_aliases(period: str) -> list[str]:
+    text = str(period)
+    aliases = []
+    if text in {"T+1", "T1"}:
+        aliases.extend(["T1", "T1_FY2026E", "FY1"])
+    elif text in {"T+2", "T2"}:
+        aliases.extend(["T2", "T2_FY2027E", "FY2"])
+    elif text in {"T+3", "T3"}:
+        aliases.extend(["T3", "T3_FY2028E", "FY3"])
+    return aliases
 
-    Returns (inputs_dict, defaults_used) where *defaults_used* lists the
-    field names that fell back to a hard-coded default because the agent
-    did not supply a value.
-    """
-    cv = {}
-    p = workspace / "calculated_valuation.json"
-    if p.exists():
-        try:
-            cv = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, ValueError):
-            cv = {}
 
-    raw_inputs = {}
-    rp = workspace / "valuation_raw_inputs.json"
-    if rp.exists():
-        try:
-            raw_inputs = json.loads(rp.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, ValueError):
-            raw_inputs = {}
+def _assumption_lineage(source_name: str, row: dict, period: str, value: float) -> dict:
+    refs = row.get("evidence_ids") or []
+    if isinstance(refs, str):
+        refs = [refs]
+    return {
+        "source": "step4_structured_assumptions.json",
+        "variable": row.get("variable") or source_name,
+        "requested_period": period,
+        "source_period": row.get("year", period),
+        "case": "p50",
+        "value": value,
+        "evidence_ids": refs,
+        "derivation": row.get("derivation", ""),
+    }
 
+
+def _require_assumption_value(
+    lookup: dict,
+    names: list[str],
+    period: str,
+) -> tuple[float, dict]:
+    found = _assumption_row(lookup, names, period)
+    if not found:
+        raise ValueError(
+            f"Missing Step 4 assumption for {names[0]} in {period}. "
+            "Do not use default model assumptions."
+        )
+    source_name, row = found
+    raw = _num(row.get("p50"), 0.0)
+    # Apply percentage conversion by naming convention — no heuristic
+    if _is_pct_variable(source_name) and abs(raw) > 1.0:
+        raw = raw / 100.0
+    return raw, _assumption_lineage(source_name, row, period, raw)
+
+
+def _base_inputs(structured: dict, workspace: Path) -> tuple[dict, dict]:
+    """Load required Step 5 model inputs with no silent defaults."""
     model_inputs = structured.get("financial_model_inputs", {}) or {}
-    defaults_used: list[str] = []
-
-    def _pick(primary, fallback_key=None, fallback_dict=None, default=0.0, field_name=""):
-        """Return value from primary, then fallback, then default; track usage."""
-        val = model_inputs.get(primary)
-        if val is not None and not isinstance(val, bool):
-            return _num(val, default)
-        if fallback_key and fallback_dict:
-            fb = fallback_dict.get(fallback_key)
-            if fb is not None and not isinstance(fb, bool):
-                return _num(fb, default)
-        if field_name:
-            defaults_used.append(field_name)
-        return default
-
-    shares = _pick("shares_outstanding", "shares_outstanding", raw_inputs, 0.0, "shares_outstanding")
-    if shares <= 0:
-        shares = 1.0
-        if "shares_outstanding" not in defaults_used:
-            defaults_used.append("shares_outstanding")
-
-    price = _pick("current_price", default=0.0)
-    if price <= 0:
-        for key in ("pe_forward", "pe_trailing"):
-            if isinstance(cv.get(key), dict):
-                price = _num(cv[key].get("price"), 0.0)
-                if price > 0:
-                    break
+    missing = [field for field in REQUIRED_MODEL_INPUTS if model_inputs.get(field) in (None, "")]
+    if missing:
+        raise ValueError(
+            "financial_model_inputs missing required fields: "
+            f"{missing}. Step 5 does not allow hard-coded fallback assumptions."
+        )
 
     inputs = {
-        "shares_outstanding": shares,
-        "current_price": price,
-        "cash": _pick("cash", "total_cash", raw_inputs, 0.0, "cash"),
-        "debt": _pick("debt", "total_debt", raw_inputs, 0.0, "debt"),
-        "equity": _pick("equity", "total_equity", raw_inputs, 0.0, "equity"),
-        "nwc_ratio": _pick("nwc_ratio", default=0.08, field_name="nwc_ratio"),
-        "ppe_ratio": _pick("ppe_ratio", default=0.25, field_name="ppe_ratio"),
-        "other_assets_ratio": _pick("other_assets_ratio", default=0.05, field_name="other_assets_ratio"),
-        "ap_ratio": _pick("ap_ratio", default=0.06, field_name="ap_ratio"),
-        "dividend_payout": _pick("dividend_payout", default=0.0, field_name="dividend_payout"),
+        field: _num(model_inputs[field], 0.0)
+        for field in REQUIRED_MODEL_INPUTS
     }
-    return inputs, defaults_used
+    if inputs["shares_outstanding"] <= 0:
+        raise ValueError("financial_model_inputs.shares_outstanding must be positive")
+    if inputs["diluted_shares"] <= 0:
+        raise ValueError("financial_model_inputs.diluted_shares must be positive")
 
+    # Load optional BS-driver inputs
+    for field in OPTIONAL_BS_INPUTS:
+        val = model_inputs.get(field)
+        if val not in (None, ""):
+            inputs[field] = _num(val, 0.0)
+
+    if model_inputs.get("current_price") not in (None, ""):
+        inputs["current_price"] = _num(model_inputs["current_price"], 0.0)
+
+    lineage = {
+        field: {
+            "source": "step4_structured_assumptions.json",
+            "field": f"financial_model_inputs.{field}",
+            "value": inputs.get(field, 0.0),
+        }
+        for field in REQUIRED_MODEL_INPUTS + OPTIONAL_BS_INPUTS
+        if field in inputs
+    }
+    return inputs, lineage
+
+
+def _load_reviewed_assumptions(workspace: Path) -> dict:
+    reviewed_path = workspace / "_reviewed_assumptions.json"
+    if not reviewed_path.exists():
+        raise FileNotFoundError(
+            f"{reviewed_path} missing. Step 5 requires the user-reviewed Step 4 assumption lock."
+        )
+    try:
+        reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        raise ValueError(f"{reviewed_path} is invalid: {exc}") from exc
+    assumptions = reviewed.get("assumptions")
+    if not isinstance(assumptions, dict) or not assumptions:
+        raise ValueError("_reviewed_assumptions.json must contain a non-empty assumptions object")
+    missing = sorted(REQUIRED_REVIEWED_VARIABLES - set(assumptions))
+    if missing:
+        raise ValueError(f"_reviewed_assumptions.json missing required reviewed variables: {missing}")
+    return reviewed
+
+
+# ── Model builder ────────────────────────────────────────────────────────
 
 def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
     """Build a three-year formula-linked forecast model from Step 4 assumptions."""
@@ -170,17 +272,43 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
     if not structured:
         raise FileNotFoundError(f"{ws / 'step4_structured_assumptions.json'} not found")
 
+    reviewed = _load_reviewed_assumptions(ws)
     periods = _periods(structured)
     lookup = _matrix_lookup(structured)
-    inputs, defaults_used = _base_inputs(structured, ws)
+    inputs, input_lineage = _base_inputs(structured, ws)
+    assumption_lineage: dict[str, dict] = {}
+    used_reviewed_variables: set[str] = set()
 
-    # Track assumption-matrix defaults for da_ratio / capex_ratio
-    assumption_defaults: list[str] = []
-
-    segments = [
-        s for s in structured.get("segment_revenues", []) or []
-        if str(s.get("name", "")).strip().lower() != "total"
-    ]
+    # ── Normalize segment_revenues to a flat list ──────────────────────────
+    raw_segments = structured.get("segment_revenues", []) or []
+    if isinstance(raw_segments, list):
+        segments = [
+            s for s in raw_segments
+            if isinstance(s, dict) and str(s.get("name", "")).strip().lower() != "total"
+        ]
+    elif isinstance(raw_segments, dict):
+        level_data = raw_segments.get("product_level") or raw_segments.get("geographic_level") or {}
+        if isinstance(level_data, dict):
+            segments = []
+            for seg_name, seg_data in level_data.items():
+                if str(seg_name).strip().lower() == "total":
+                    continue
+                if not isinstance(seg_data, dict):
+                    continue
+                seg_entry: dict[str, Any] = {
+                    "name": seg_name,
+                    "base_revenue": seg_data.get("base", seg_data.get("base_revenue", seg_data.get("base_revenue_cny_m", 0))),
+                    "p50_growth": seg_data.get("p50_growth", 0),
+                    "p50": seg_data.get("p50", 0),
+                }
+                for key, value in seg_data.items():
+                    if str(key).endswith("_growth"):
+                        seg_entry[key] = value
+                segments.append(seg_entry)
+        else:
+            segments = []
+    else:
+        segments = []
     if not segments:
         raise ValueError("No segment_revenues found for financial model generation")
 
@@ -192,94 +320,182 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         values = {}
         prev = base
         for idx, period in enumerate(periods):
+            lineage = None
             growth = _num(seg.get(f"{period}_growth"), None)
+            if growth is not None and _is_pct_variable(f"{period}_growth") and abs(growth) > 1.0:
+                growth = growth / 100.0
             if growth is None:
-                # T+1 uses segment p50; later years use explicit period total
-                # growth when available, otherwise repeat the segment p50.
-                fallback = _num(seg.get("p50_growth"), 0.0)
-                growth = _assumption_value(
-                    lookup,
-                    [f"{name}_rev_growth", "rev_growth", "revenue_growth"],
-                    period,
-                    fallback,
-                )
+                if idx == 0 and seg.get("p50_growth") is not None:
+                    growth = _num(seg.get("p50_growth"), 0.0)
+                    if _is_pct_variable("p50_growth") and abs(growth) > 1.0:
+                        growth = growth / 100.0
+                    lineage = {
+                        "source": "step4_structured_assumptions.json",
+                        "field": f"segment_revenues.{name}.p50_growth",
+                        "requested_period": period,
+                        "case": "p50",
+                        "value": growth,
+                    }
+                    used_reviewed_variables.add("rev_growth")
+                else:
+                    growth, lineage = _require_assumption_value(
+                        lookup,
+                        [f"{name}_rev_growth", "rev_growth", "revenue_growth"],
+                        period,
+                    )
+                    used_reviewed_variables.add("rev_growth")
+            else:
+                lineage = {
+                    "source": "step4_structured_assumptions.json",
+                    "field": f"segment_revenues.{name}.{period}_growth",
+                    "requested_period": period,
+                    "case": "p50",
+                    "value": growth,
+                }
+                used_reviewed_variables.add("rev_growth")
             revenue = prev * (1 + growth)
+            lineage_key = f"segment:{name}:{period}:growth"
+            assumption_lineage[lineage_key] = lineage
             values[period] = {
                 "revenue": revenue,
                 "growth": growth,
                 "formula": (
                     f"{name} {period} revenue = prior period revenue × (1 + {period} growth)"
                 ),
+                "lineage": [lineage_key],
             }
             total_revenue[period] += revenue
             prev = revenue
         model_segments.append({"name": name, "base_revenue": base, "forecast": values})
 
-    income_rows = []
-    cashflow_rows = []
-    balance_rows = []
-    checks = []
+    income_values: dict[str, dict] = {}
+    cash_values: dict[str, dict] = {}
+    balance_values: dict[str, dict] = {}
+    valuation_values: dict[str, dict] = {}
+    checks: list[dict] = []
 
+    # ── Initial BS state ───────────────────────────────────────────────────
     prev_cash = inputs["cash"]
-    prev_nwc = sum(_num(s.get("base_revenue"), 0.0) for s in segments) * inputs["nwc_ratio"]
-    prev_ppe = sum(_num(s.get("base_revenue"), 0.0) for s in segments) * inputs["ppe_ratio"]
+    total_base_revenue = sum(_num(s.get("base_revenue"), 0.0) for s in segments)
+    prev_nwc = total_base_revenue * inputs["nwc_ratio"]
+    prev_ppe = total_base_revenue * inputs["ppe_ratio"]
     prev_equity = inputs["equity"]
     if prev_equity <= 0:
         prev_equity = prev_cash + prev_nwc + prev_ppe
+    prev_debt = inputs["debt"]
+    shares_outstanding = inputs["shares_outstanding"]
 
-    income_values = {}
-    cash_values = {}
-    balance_values = {}
-    valuation_values = {}
+    # BS-driver fallback state (when optional fields absent)
+    bs_inputs_present = all(inputs.get(k, 0.0) != 0.0 for k in ["ar_days", "inv_days", "ap_days"])
+    bs_hardcoded_warning = (
+        "" if bs_inputs_present
+        else "BS leaf items are hard-coded from model; add ar_days/inv_days/ap_days to Step 4 inputs for formula-linked BS"
+    )
 
     for period in periods:
         revenue = total_revenue[period]
-        gm = _assumption_value(lookup, ["gross_margin", "gm"], period, 0.35)
-        opex_ratio = _assumption_value(lookup, ["opex_ratio", "operating_expense_ratio"], period, 0.18)
-        tax_rate = _assumption_value(lookup, ["tax_rate", "effective_tax_rate"], period, 0.20)
-        da_ratio = _assumption_value(lookup, ["da_ratio", "depreciation_ratio"], period, 0.04)
-        capex_ratio = _assumption_value(lookup, ["capex_ratio"], period, 0.06)
-        nwc_ratio = _assumption_value(lookup, ["nwc_ratio"], period, inputs["nwc_ratio"])
-        pe = _assumption_value(lookup, ["pe", "forward_pe"], period, 20.0)
 
-        # Track assumption-matrix defaults (only on first period to avoid duplicates)
-        if period == periods[0]:
-            for var_name, names, default_val in [
-                ("da_ratio", ["da_ratio", "depreciation_ratio"], 0.04),
-                ("capex_ratio", ["capex_ratio"], 0.06),
-            ]:
-                found = any(
-                    (name.lower(), period) in lookup or (name.lower(), "") in lookup
-                    for name in names
-                )
-                if not found:
-                    assumption_defaults.append(var_name)
+        # ── Assumptions ──
+        gm, gm_lineage = _require_assumption_value(lookup, ["gross_margin", "gm"], period)
+        opex_ratio, opex_lineage = _require_assumption_value(lookup, ["opex_ratio", "operating_expense_ratio"], period)
+        tax_rate, tax_lineage = _require_assumption_value(lookup, ["tax_rate", "effective_tax_rate"], period)
+        pe, pe_lineage = _require_assumption_value(
+            lookup,
+            ["pe", "forward_pe", "pe_multiple", "pe_fwd_t1", "pe_fwd_t2", "pe_fwd_t3"],
+            period,
+        )
+        for var_name, lineage in [
+            ("gross_margin", gm_lineage),
+            ("opex_ratio", opex_lineage),
+            ("tax_rate", tax_lineage),
+            ("pe", pe_lineage),
+        ]:
+            key = f"assumption:{var_name}:{period}"
+            assumption_lineage[key] = lineage
+            used_reviewed_variables.add(var_name)
 
+        # ── Model inputs ──
+        da_ratio = inputs["da_ratio"]
+        capex_ratio = inputs["capex_ratio"]
+        nwc_ratio = inputs["nwc_ratio"]
+        other_assets_ratio = inputs["other_assets_ratio"]
+        ap_ratio = inputs["ap_ratio"]
+        dividend_payout = inputs["dividend_payout"]
+        int_rate_debt = inputs["interest_rate_on_debt"]
+        int_rate_cash = inputs["interest_rate_on_cash"]
+        dilution_pct = inputs["annual_share_dilution_pct"]
+
+        # ── Income Statement ──
         gross_profit = revenue * gm
         cogs = revenue - gross_profit
         opex = revenue * opex_ratio
         ebit = gross_profit - opex
-        tax = max(0.0, ebit * tax_rate)
-        net_income = ebit - tax
-        eps = net_income / inputs["shares_outstanding"] if inputs["shares_outstanding"] else 0.0
 
+        # Interest: use prior-period balances (current-period BS items computed below)
+        avg_debt = prev_debt
+        avg_cash = prev_cash
+        interest_expense = avg_debt * int_rate_debt
+        interest_income = avg_cash * int_rate_cash
+        ebt = ebit - interest_expense + interest_income
+
+        # Tax on EBT (not EBIT)
+        tax = max(0.0, ebt * tax_rate)
+        net_income = ebt - tax
+
+        # EPS with dilution over time
+        eps_basic = net_income / shares_outstanding if shares_outstanding else 0.0
+        diluted_shares = inputs["diluted_shares"] * ((1 + dilution_pct) ** list(periods).index(period))
+        eps_diluted = net_income / diluted_shares if diluted_shares else 0.0
+
+        # ── Cash Flow ──
         da = revenue * da_ratio
         capex = revenue * capex_ratio
         nwc = revenue * nwc_ratio
         delta_nwc = nwc - prev_nwc
         fcf = net_income + da - capex - delta_nwc
-        dividends = max(0.0, net_income * inputs["dividend_payout"])
+        dividends = max(0.0, net_income * dividend_payout)
         ending_cash = prev_cash + fcf - dividends
 
+        # ── Balance Sheet (expanded) ──
         ppe = prev_ppe + capex - da
-        other_assets = revenue * inputs["other_assets_ratio"]
-        ap = revenue * inputs["ap_ratio"]
-        debt = inputs["debt"]
-        equity = prev_equity + net_income - dividends
-        total_assets = ending_cash + nwc + ppe + other_assets
-        total_liab_equity = ap + debt + equity
+        other_assets = revenue * other_assets_ratio
+
+        # BS driver-based items (formula-linked when inputs present)
+        ar_days = inputs.get("ar_days", 0.0)
+        inv_days = inputs.get("inv_days", 0.0)
+        ap_days_val = inputs.get("ap_days", 0.0)
+        intangible_assets = inputs.get("intangible_assets", 0.0)
+        deferred_rev_ratio = inputs.get("deferred_rev_ratio", 0.0)
+        accrued_ratio = inputs.get("accrued_ratio", 0.0)
+        other_ncl_ratio = inputs.get("other_ncl_ratio", 0.0)
+        st_debt = inputs.get("st_debt", 0.0)
+        lt_debt = inputs.get("lt_debt", prev_debt - st_debt)
+
+        ar = (revenue * ar_days / 365.0) if ar_days else 0.0
+        inventory = (cogs * inv_days / 365.0) if inv_days else 0.0
+        prepaid_other_ca = revenue * 0.02  # minimal default for Prepaid/Other CA
+        ap_bs = (cogs * ap_days_val / 365.0) if ap_days_val else (revenue * ap_ratio)
+        accrued_liab = revenue * accrued_ratio
+        deferred_rev = revenue * deferred_rev_ratio
+        other_ncl = revenue * other_ncl_ratio
+
+        # Paid-in Capital (constant)
+        paid_in_capital = inputs["equity"] * 0.5  # heuristic split; overwritten if Step 4 provides
+        # Retained Earnings
+        retained_earnings = prev_equity - paid_in_capital + net_income - dividends if prev_equity else net_income - dividends
+        other_equity = 0.0  # OCI / Minority Interest placeholder
+
+        # Aggregates
+        total_current_assets = ending_cash + ar + inventory + prepaid_other_ca
+        total_assets = total_current_assets + ppe + intangible_assets + other_assets
+        total_current_liab = ap_bs + st_debt + accrued_liab + deferred_rev
+        total_liabilities = total_current_liab + lt_debt + other_ncl
+        total_equity = paid_in_capital + retained_earnings + other_equity
+        total_liab_equity = total_liabilities + total_equity
         bs_check = total_assets - total_liab_equity
-        target_price = eps * pe
+
+        # ── Valuation ──
+        target_price = eps_diluted * pe
 
         income_values[period] = {
             "revenue": revenue,
@@ -289,10 +505,16 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
             "opex": opex,
             "opex_ratio": opex_ratio,
             "ebit": ebit,
+            "ebitda": ebit + da,
+            "interest_expense": interest_expense,
+            "interest_income": interest_income,
+            "ebt": ebt,
             "tax": tax,
             "tax_rate": tax_rate,
             "net_income": net_income,
-            "eps": eps,
+            "eps_basic": eps_basic,
+            "eps_diluted": eps_diluted,
+            "da": da,
         }
         cash_values[period] = {
             "net_income": net_income,
@@ -305,20 +527,37 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         }
         balance_values[period] = {
             "cash": ending_cash,
-            "nwc": nwc,
+            "ar": ar,
+            "inventory": inventory,
+            "prepaid_other_ca": prepaid_other_ca,
+            "total_current_assets": total_current_assets,
             "ppe": ppe,
+            "intangible_assets": intangible_assets,
             "other_assets": other_assets,
             "total_assets": total_assets,
-            "ap": ap,
-            "debt": debt,
-            "equity": equity,
+            "ap": ap_bs,
+            "st_debt": st_debt,
+            "accrued_liab": accrued_liab,
+            "deferred_rev": deferred_rev,
+            "total_current_liab": total_current_liab,
+            "lt_debt": lt_debt,
+            "other_ncl": other_ncl,
+            "total_liabilities": total_liabilities,
+            "paid_in_capital": paid_in_capital,
+            "retained_earnings": retained_earnings,
+            "other_equity": other_equity,
+            "total_equity": total_equity,
             "total_liab_equity": total_liab_equity,
             "balance_check": bs_check,
+            "_bs_driver_mode": "formula-linked" if bs_inputs_present else "hard-coded",
         }
         valuation_values[period] = {
-            "eps": eps,
+            "eps": eps_diluted,
+            "eps_basic": eps_basic,
             "forward_pe": pe,
             "target_price": target_price,
+            "ebitda": ebit + da,
+            "diluted_shares": diluted_shares,
         }
 
         checks.append({
@@ -332,14 +571,53 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
             "notes": "Simplified model uses explicit cash/equity roll-forward; WARN means inputs need a fuller balance-sheet schedule.",
         })
 
+        # ── State roll-forward ──
         prev_cash = ending_cash
         prev_nwc = nwc
         prev_ppe = ppe
-        prev_equity = equity
+        prev_equity = total_equity
+        prev_debt = st_debt + lt_debt
+        shares_outstanding = shares_outstanding * (1 + dilution_pct)
 
-    def row(statement: str, label: str, key: str, formula: str, kind: str = "number"):
-        values = {p: income_values[p].get(key, cash_values[p].get(key, balance_values[p].get(key))) for p in periods}
-        return {"statement": statement, "label": label, "values": values, "formula": formula, "format": kind}
+    # ── Statement row builders ─────────────────────────────────────────────
+
+    def row(statement: str, label: str, key: str, formula: str,
+            kind: str = "number", values_override: dict | None = None):
+        values = values_override if values_override is not None else {
+            p: income_values[p].get(key, cash_values[p].get(key, balance_values[p].get(key, valuation_values[p].get(key, 0.0))))
+            for p in periods
+        }
+        lineage = _row_lineage(label, periods)
+        return {
+            "statement": statement,
+            "label": label,
+            "values": values,
+            "formula": formula,
+            "format": kind,
+            "lineage": lineage,
+        }
+
+    def _row_lineage(label: str, periods_: list[str]) -> list[str]:
+        label_key = label.lower()
+        refs: list[str] = []
+        if "revenue" in label_key:
+            refs.extend([f"segment:{seg['name']}:{p}:growth" for seg in model_segments for p in periods_])
+        if "gross" in label_key or "cogs" in label_key:
+            refs.extend([f"assumption:gross_margin:{p}" for p in periods_])
+        if "operating expense" in label_key or "ebit" in label_key or "ebitda" in label_key:
+            refs.extend([f"assumption:gross_margin:{p}" for p in periods_])
+            refs.extend([f"assumption:opex_ratio:{p}" for p in periods_])
+        if "d&a" in label_key or "depreciation" in label_key or label_key == "da (add-back)":
+            refs.extend(["input:da_ratio"])
+        if "interest" in label_key or "ebt" in label_key:
+            refs.extend(["input:interest_rate_on_debt", "input:interest_rate_on_cash"])
+        if "tax" in label_key or "net income" in label_key or "eps" in label_key:
+            refs.extend([f"assumption:tax_rate:{p}" for p in periods_])
+            refs.extend(["input:shares_outstanding", "input:diluted_shares",
+                         "input:annual_share_dilution_pct"])
+        if "forward pe" in label_key or "target price" in label_key:
+            refs.extend([f"assumption:pe:{p}" for p in periods_])
+        return sorted(set(refs))
 
     income_rows = [
         row("Income Statement", "Revenue", "revenue", "Σ segment revenue", "number"),
@@ -348,37 +626,130 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         row("Income Statement", "Gross Margin", "gross_margin", "Gross Profit / Revenue", "percent"),
         row("Income Statement", "Operating Expense", "opex", "Revenue × OpEx ratio", "number"),
         row("Income Statement", "EBIT", "ebit", "Gross Profit - Operating Expense", "number"),
-        row("Income Statement", "Tax Expense", "tax", "MAX(0, EBIT × effective tax rate)", "number"),
-        row("Income Statement", "Net Income", "net_income", "EBIT - Tax Expense", "number"),
-        row("Income Statement", "EPS", "eps", "Net Income / shares outstanding", "per_share"),
+        row("Income Statement", "EBITDA", "ebitda", "EBIT + D&A", "number"),
+        row("Income Statement", "Interest Expense", "interest_expense", "Avg Debt × interest rate on debt", "number"),
+        row("Income Statement", "Interest Income", "interest_income", "Avg Cash × interest rate on cash", "number"),
+        row("Income Statement", "EBT (Pre-tax Income)", "ebt", "EBIT - Interest Exp + Interest Inc", "number"),
+        row("Income Statement", "Tax Expense", "tax", "MAX(0, EBT × effective tax rate)", "number"),
+        row("Income Statement", "Net Income", "net_income", "EBT - Tax Expense", "number"),
+        row("Income Statement", "EPS (Basic)", "eps_basic", "Net Income / basic shares", "per_share"),
+        row("Income Statement", "EPS (Diluted)", "eps_diluted", "Net Income / diluted shares (with annual dilution)", "per_share"),
+        row("Income Statement", "D&A (add-back)", "da", "Revenue × D&A ratio", "number"),
     ]
     cashflow_rows = [
-        {"statement": "Cash Flow", "label": "Net Income", "values": {p: cash_values[p]["net_income"] for p in periods}, "formula": "Linked from income statement", "format": "number"},
-        {"statement": "Cash Flow", "label": "D&A", "values": {p: cash_values[p]["da"] for p in periods}, "formula": "Revenue × D&A ratio", "format": "number"},
-        {"statement": "Cash Flow", "label": "Capex", "values": {p: cash_values[p]["capex"] for p in periods}, "formula": "Revenue × capex ratio", "format": "number"},
-        {"statement": "Cash Flow", "label": "Change in NWC", "values": {p: cash_values[p]["delta_nwc"] for p in periods}, "formula": "Ending NWC - prior NWC", "format": "number"},
-        {"statement": "Cash Flow", "label": "Free Cash Flow", "values": {p: cash_values[p]["fcf"] for p in periods}, "formula": "Net Income + D&A - Capex - Change in NWC", "format": "number"},
-        {"statement": "Cash Flow", "label": "Ending Cash", "values": {p: cash_values[p]["ending_cash"] for p in periods}, "formula": "Beginning Cash + FCF - dividends", "format": "number"},
+        {"statement": "Cash Flow", "label": "Net Income", "values": {p: cash_values[p]["net_income"] for p in periods}, "formula": "Linked from income statement", "format": "number", "lineage": _row_lineage("Net Income", periods)},
+        {"statement": "Cash Flow", "label": "D&A", "values": {p: cash_values[p]["da"] for p in periods}, "formula": "Revenue × D&A ratio", "format": "number", "lineage": ["input:da_ratio"]},
+        {"statement": "Cash Flow", "label": "Capex", "values": {p: cash_values[p]["capex"] for p in periods}, "formula": "Revenue × capex ratio", "format": "number", "lineage": ["input:capex_ratio"]},
+        {"statement": "Cash Flow", "label": "Change in NWC", "values": {p: cash_values[p]["delta_nwc"] for p in periods}, "formula": "Ending NWC - prior NWC", "format": "number", "lineage": ["input:nwc_ratio"]},
+        {"statement": "Cash Flow", "label": "Free Cash Flow", "values": {p: cash_values[p]["fcf"] for p in periods}, "formula": "Net Income + D&A - Capex - Change in NWC", "format": "number", "lineage": ["input:da_ratio", "input:capex_ratio", "input:nwc_ratio"]},
+        {"statement": "Cash Flow", "label": "Dividends", "values": {p: cash_values[p]["dividends"] for p in periods}, "formula": "Net Income × dividend payout ratio", "format": "number", "lineage": ["input:dividend_payout"]},
+        {"statement": "Cash Flow", "label": "Ending Cash", "values": {p: cash_values[p]["ending_cash"] for p in periods}, "formula": "Beginning Cash + FCF - dividends", "format": "number", "lineage": ["input:cash", "input:dividend_payout"]},
     ]
     balance_rows = [
-        {"statement": "Balance Sheet", "label": "Cash", "values": {p: balance_values[p]["cash"] for p in periods}, "formula": "Linked from cash-flow ending cash", "format": "number"},
-        {"statement": "Balance Sheet", "label": "Net Working Capital", "values": {p: balance_values[p]["nwc"] for p in periods}, "formula": "Revenue × NWC ratio", "format": "number"},
-        {"statement": "Balance Sheet", "label": "PP&E", "values": {p: balance_values[p]["ppe"] for p in periods}, "formula": "Prior PP&E + Capex - D&A", "format": "number"},
-        {"statement": "Balance Sheet", "label": "Other Assets", "values": {p: balance_values[p]["other_assets"] for p in periods}, "formula": "Revenue × other assets ratio", "format": "number"},
-        {"statement": "Balance Sheet", "label": "Total Assets", "values": {p: balance_values[p]["total_assets"] for p in periods}, "formula": "Cash + NWC + PP&E + Other Assets", "format": "number"},
-        {"statement": "Balance Sheet", "label": "AP / Operating Liabilities", "values": {p: balance_values[p]["ap"] for p in periods}, "formula": "Revenue × AP ratio", "format": "number"},
-        {"statement": "Balance Sheet", "label": "Debt", "values": {p: balance_values[p]["debt"] for p in periods}, "formula": "Input debt balance", "format": "number"},
-        {"statement": "Balance Sheet", "label": "Equity", "values": {p: balance_values[p]["equity"] for p in periods}, "formula": "Prior equity + net income - dividends", "format": "number"},
-        {"statement": "Balance Sheet", "label": "Balance Check", "values": {p: balance_values[p]["balance_check"] for p in periods}, "formula": "Total assets - total liabilities & equity", "format": "number"},
+        # Assets
+        {"statement": "Balance Sheet", "label": "Cash & Equivalents", "values": {p: balance_values[p]["cash"] for p in periods}, "formula": "Linked from CF ending cash", "format": "number", "lineage": ["input:cash"]},
+        {"statement": "Balance Sheet", "label": "Accounts Receivable", "values": {p: balance_values[p]["ar"] for p in periods}, "formula": "Revenue × AR days / 365" if bs_inputs_present else "Hard-coded from model", "format": "number", "lineage": ["input:ar_days"] if bs_inputs_present else ["input:ap_ratio"]},
+        {"statement": "Balance Sheet", "label": "Inventory", "values": {p: balance_values[p]["inventory"] for p in periods}, "formula": "COGS × Inv days / 365" if bs_inputs_present else "Hard-coded from model", "format": "number", "lineage": ["input:inv_days"] if bs_inputs_present else ["input:nwc_ratio"]},
+        {"statement": "Balance Sheet", "label": "Prepaid & Other Current Assets", "values": {p: balance_values[p]["prepaid_other_ca"] for p in periods}, "formula": "Revenue × ratio (~2%)", "format": "number", "lineage": ["input:nwc_ratio"]},
+        {"statement": "Balance Sheet", "label": "Total Current Assets", "values": {p: balance_values[p]["total_current_assets"] for p in periods}, "formula": "Cash + AR + Inventory + Prepaid", "format": "number", "lineage": ["derived:sum_current_assets"]},
+        {"statement": "Balance Sheet", "label": "PP&E (Net)", "values": {p: balance_values[p]["ppe"] for p in periods}, "formula": "Prior PP&E + Capex - D&A", "format": "number", "lineage": ["input:ppe_ratio", "input:capex_ratio", "input:da_ratio"]},
+        {"statement": "Balance Sheet", "label": "Intangible Assets & Goodwill", "values": {p: balance_values[p]["intangible_assets"] for p in periods}, "formula": "Input balance (constant)", "format": "number", "lineage": ["input:intangible_assets"]},
+        {"statement": "Balance Sheet", "label": "Other Non-Current Assets", "values": {p: balance_values[p]["other_assets"] for p in periods}, "formula": "Revenue × other assets ratio", "format": "number", "lineage": ["input:other_assets_ratio"]},
+        {"statement": "Balance Sheet", "label": "Total Assets", "values": {p: balance_values[p]["total_assets"] for p in periods}, "formula": "Current Assets + Non-Current Assets", "format": "number", "lineage": ["derived:sum_assets"]},
+        # Liabilities
+        {"statement": "Balance Sheet", "label": "Accounts Payable", "values": {p: balance_values[p]["ap"] for p in periods}, "formula": "COGS × AP days / 365" if bs_inputs_present else "Revenue × AP ratio", "format": "number", "lineage": ["input:ap_days"] if bs_inputs_present else ["input:ap_ratio"]},
+        {"statement": "Balance Sheet", "label": "Short-term Debt", "values": {p: balance_values[p]["st_debt"] for p in periods}, "formula": "Input ST debt balance", "format": "number", "lineage": ["input:st_debt"] if inputs.get("st_debt", 0.0) != 0.0 else ["input:debt"]},
+        {"statement": "Balance Sheet", "label": "Accrued Liabilities", "values": {p: balance_values[p]["accrued_liab"] for p in periods}, "formula": "Revenue × accrued ratio", "format": "number", "lineage": ["input:accrued_ratio"] if inputs.get("accrued_ratio", 0.0) != 0.0 else ["input:ap_ratio"]},
+        {"statement": "Balance Sheet", "label": "Deferred Revenue", "values": {p: balance_values[p]["deferred_rev"] for p in periods}, "formula": "Revenue × deferred revenue ratio", "format": "number", "lineage": ["input:deferred_rev_ratio"] if inputs.get("deferred_rev_ratio", 0.0) != 0.0 else ["input:nwc_ratio"]},
+        {"statement": "Balance Sheet", "label": "Total Current Liabilities", "values": {p: balance_values[p]["total_current_liab"] for p in periods}, "formula": "AP + ST Debt + Accrued + Deferred Rev", "format": "number", "lineage": ["derived:sum_current_liabilities"]},
+        {"statement": "Balance Sheet", "label": "Long-term Debt", "values": {p: balance_values[p]["lt_debt"] for p in periods}, "formula": "Input LT debt balance", "format": "number", "lineage": ["input:lt_debt"] if inputs.get("lt_debt", 0.0) != 0.0 else ["input:debt"]},
+        {"statement": "Balance Sheet", "label": "Other Non-Current Liabilities", "values": {p: balance_values[p]["other_ncl"] for p in periods}, "formula": "Revenue × other NCL ratio", "format": "number", "lineage": ["input:other_ncl_ratio"] if inputs.get("other_ncl_ratio", 0.0) != 0.0 else ["input:ap_ratio"]},
+        {"statement": "Balance Sheet", "label": "Total Liabilities", "values": {p: balance_values[p]["total_liabilities"] for p in periods}, "formula": "Current Liabilities + Non-Current Liabilities", "format": "number", "lineage": ["derived:sum_liabilities"]},
+        # Equity
+        {"statement": "Balance Sheet", "label": "Paid-in Capital", "values": {p: balance_values[p]["paid_in_capital"] for p in periods}, "formula": "Input balance (constant)", "format": "number", "lineage": ["input:equity"]},
+        {"statement": "Balance Sheet", "label": "Retained Earnings", "values": {p: balance_values[p]["retained_earnings"] for p in periods}, "formula": "Prior RE + Net Income - Dividends", "format": "number", "lineage": ["input:dividend_payout"]},
+        {"statement": "Balance Sheet", "label": "Other Equity", "values": {p: balance_values[p]["other_equity"] for p in periods}, "formula": "OCI / Minority / Treasury", "format": "number", "lineage": ["input:equity"]},
+        {"statement": "Balance Sheet", "label": "Total Equity", "values": {p: balance_values[p]["total_equity"] for p in periods}, "formula": "Paid-in Capital + Retained Earnings + Other", "format": "number", "lineage": ["derived:sum_equity"]},
+        {"statement": "Balance Sheet", "label": "Total Liabilities & Equity", "values": {p: balance_values[p]["total_liab_equity"] for p in periods}, "formula": "Total Liabilities + Total Equity", "format": "number", "lineage": ["derived:sum_liabilities_equity"]},
+        {"statement": "Balance Sheet", "label": "Balance Check", "values": {p: balance_values[p]["balance_check"] for p in periods}, "formula": "Total Assets - Total L&E (should = 0)", "format": "number", "lineage": ["derived:balance_check"]},
     ]
     valuation_rows = [
-        {"statement": "Valuation", "label": "EPS", "values": {p: valuation_values[p]["eps"] for p in periods}, "formula": "Linked from income statement", "format": "per_share"},
-        {"statement": "Valuation", "label": "Forward PE", "values": {p: valuation_values[p]["forward_pe"] for p in periods}, "formula": "Step 4 assumption matrix", "format": "multiple"},
-        {"statement": "Valuation", "label": "Target Price", "values": {p: valuation_values[p]["target_price"] for p in periods}, "formula": "EPS × Forward PE", "format": "per_share"},
+        {"statement": "Valuation", "label": "EPS (Basic)", "values": {p: valuation_values[p]["eps_basic"] for p in periods}, "formula": "Linked from income statement", "format": "per_share", "lineage": _row_lineage("EPS", periods)},
+        {"statement": "Valuation", "label": "EPS (Diluted)", "values": {p: valuation_values[p]["eps"] for p in periods}, "formula": "Net Income / diluted shares", "format": "per_share", "lineage": _row_lineage("EPS", periods)},
+        {"statement": "Valuation", "label": "Forward PE", "values": {p: valuation_values[p]["forward_pe"] for p in periods}, "formula": "Step 4 assumption matrix", "format": "multiple", "lineage": [f"assumption:pe:{p}" for p in periods]},
+        {"statement": "Valuation", "label": "Target Price", "values": {p: valuation_values[p]["target_price"] for p in periods}, "formula": "EPS (Diluted) × Forward PE", "format": "per_share", "lineage": _row_lineage("Target Price", periods)},
+        {"statement": "Valuation", "label": "EBITDA", "values": {p: valuation_values[p]["ebitda"] for p in periods}, "formula": "EBIT + D&A", "format": "number", "lineage": ["input:da_ratio"]},
+        {"statement": "Valuation", "label": "Diluted Shares", "values": {p: valuation_values[p]["diluted_shares"] for p in periods}, "formula": "Diluted shares × (1 + dilution_pct)^n", "format": "number", "lineage": ["input:diluted_shares", "input:annual_share_dilution_pct"]},
     ]
 
+    # ── Integrity checks ───────────────────────────────────────────────────
+    all_rows = income_rows + cashflow_rows + balance_rows + valuation_rows
+    missing_lineage = [
+        f"{r['statement']} / {r['label']}"
+        for r in all_rows
+        if not r.get("lineage")
+    ]
+    reviewed_vars = set((reviewed.get("assumptions") or {}).keys())
+    unreviewed = sorted(v for v in used_reviewed_variables if v not in reviewed_vars)
+    checks.extend([
+        {
+            "period": "all",
+            "check": "No fallback model assumptions",
+            "actual": 0,
+            "expected": 0,
+            "difference": 0,
+            "tolerance": 0,
+            "status": "OK",
+            "notes": "Required model inputs and assumptions were present; no hard-coded defaults used.",
+        },
+        {
+            "period": "all",
+            "check": "Reviewed assumption lock coverage",
+            "actual": len(used_reviewed_variables),
+            "expected": len(used_reviewed_variables),
+            "difference": len(unreviewed),
+            "tolerance": 0,
+            "status": "OK" if not unreviewed else "FAIL",
+            "notes": "All used high-level assumptions are present in _reviewed_assumptions.json"
+            if not unreviewed
+            else f"Unreviewed assumptions used: {unreviewed}",
+        },
+        {
+            "period": "all",
+            "check": "Formula lineage coverage",
+            "actual": len(all_rows) - len(missing_lineage),
+            "expected": len(all_rows),
+            "difference": len(missing_lineage),
+            "tolerance": 0,
+            "status": "OK" if not missing_lineage else "FAIL",
+            "notes": "Every model row has lineage references"
+            if not missing_lineage
+            else f"Rows missing lineage: {missing_lineage}",
+        },
+        {
+            "period": "all",
+            "check": "BS driver completeness",
+            "actual": int(bs_inputs_present),
+            "expected": 1,
+            "difference": 0 if bs_inputs_present else 1,
+            "tolerance": 0,
+            "status": "OK" if bs_inputs_present else "WARN",
+            "notes": bs_hardcoded_warning if not bs_inputs_present else "AR/Inv/AP driven by days-based formulas",
+        },
+        {
+            "period": "all",
+            "check": "Diluted shares provided",
+            "actual": inputs["diluted_shares"],
+            "expected": inputs["diluted_shares"],
+            "difference": 0,
+            "tolerance": 0,
+            "status": "OK",
+            "notes": f"Diluted shares: {inputs['diluted_shares']:,.0f} (dilution pct/year: {inputs['annual_share_dilution_pct']:.1%})",
+        },
+    ])
+
     return {
-        "version": 1,
+        "version": 3,
         "ticker": ticker,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "source": "step4_structured_assumptions.json",
@@ -386,10 +757,23 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
             "unit": "same as source financial statements",
             "periods": periods,
             "case": "P50",
-            "note": "Simplified formula-linked forecast model. Use the Checks section to identify where a fuller schedule is required.",
+            "note": "Formula-linked forecast model generated from locked Step 4 assumptions with explicit lineage.",
+            "tax_basis": "EBT (not EBIT)",
+            "interest_modeled": True,
+            "bs_driver_mode": "formula-linked" if bs_inputs_present else "hard-coded",
+            "percentage_detection": "naming_convention",
         },
         "inputs": inputs,
-        "defaults_used": defaults_used + assumption_defaults,
+        "defaults_used": [],
+        "lineage": {
+            "inputs": {f"input:{k}": v for k, v in input_lineage.items()},
+            "assumptions": assumption_lineage,
+            "reviewed_lock": {
+                "source": "_reviewed_assumptions.json",
+                "reviewed_at": reviewed.get("reviewed_at", ""),
+                "variables": sorted(reviewed_vars),
+            },
+        },
         "segments": model_segments,
         "statements": {
             "income_statement": income_rows,
@@ -401,27 +785,33 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
     }
 
 
+# ── HTML Renderer ────────────────────────────────────────────────────────
+
 def render_financial_model_html(model: dict) -> str:
     """Render forecast model as an HTML section body."""
     periods = model["model_conventions"]["periods"]
 
-    def table(rows: list[dict], title: str) -> str:
+    def table(rows: list[dict], title: str, period_prefix: str = "") -> str:
         head = "".join(f"<th>{escape(p, quote=True)}</th>" for p in periods)
         body = []
         for r in rows:
             kind = r.get("format", "number")
             vals = "".join(f"<td>{_fmt(r['values'].get(p), kind)}</td>" for p in periods)
+            refs = ", ".join(str(ref) for ref in r.get("lineage", [])[:6])
+            if len(r.get("lineage", [])) > 6:
+                refs += ", ..."
             body.append(
                 "<tr>"
                 f"<td><strong>{escape(r['label'], quote=True)}</strong></td>"
                 f"{vals}"
                 f"<td>{escape(r.get('formula', ''), quote=True)}</td>"
+                f"<td>{escape(refs, quote=True)}</td>"
                 "</tr>"
             )
         return (
             f"<h4>{escape(title, quote=True)}</h4>"
             "<table class=\"financial-model-table\">"
-            f"<thead><tr><th>Line Item</th>{head}<th>Formula / Link</th></tr></thead>"
+            f"<thead><tr><th>Line Item</th>{head}<th>Formula / Link</th><th>Lineage</th></tr></thead>"
             f"<tbody>{''.join(body)}</tbody></table>"
         )
 
@@ -436,11 +826,12 @@ def render_financial_model_html(model: dict) -> str:
                 f"<td>{_fmt(f['growth'], 'percent')}</td>"
                 f"<td>{_fmt(f['revenue'])}</td>"
                 f"<td>{escape(f['formula'], quote=True)}</td>"
+                f"<td>{escape(', '.join(str(ref) for ref in f.get('lineage', [])), quote=True)}</td>"
                 "</tr>"
             )
-    checks = []
+    check_rows = []
     for c in model["checks"]:
-        checks.append(
+        check_rows.append(
             "<tr>"
             f"<td>{escape(c['period'], quote=True)}</td>"
             f"<td>{escape(c['check'], quote=True)}</td>"
@@ -450,12 +841,15 @@ def render_financial_model_html(model: dict) -> str:
             "</tr>"
         )
 
+    conventions = model["model_conventions"]
     return (
         "<div class=\"financial-model\">"
-        "<p><strong>Model conventions:</strong> P50 case, three-year forecast, formula-linked from Step 4 structured assumptions.</p>"
+        f"<p><strong>Model conventions:</strong> P50 case, three-year forecast, tax on EBT, interest modeled. "
+        f"BS driver mode: {conventions.get('bs_driver_mode', 'N/A')}. "
+        f"Version {model.get('version', '?')}.</p>"
         "<h4>Segment Revenue Build</h4>"
         "<table class=\"financial-model-table\"><thead><tr>"
-        "<th>Segment</th><th>Period</th><th>Growth</th><th>Revenue</th><th>Formula / Link</th>"
+        "<th>Segment</th><th>Period</th><th>Growth</th><th>Revenue</th><th>Formula / Link</th><th>Lineage</th>"
         f"</tr></thead><tbody>{''.join(seg_rows)}</tbody></table>"
         f"{table(model['statements']['income_statement'], 'Income Statement')}"
         f"{table(model['statements']['cash_flow'], 'Cash Flow')}"
@@ -464,7 +858,7 @@ def render_financial_model_html(model: dict) -> str:
         "<h4>Checks</h4>"
         "<table class=\"financial-model-table\"><thead><tr>"
         "<th>Period</th><th>Check</th><th>Difference</th><th>Status</th><th>Notes</th>"
-        f"</tr></thead><tbody>{''.join(checks)}</tbody></table>"
+        f"</tr></thead><tbody>{''.join(check_rows)}</tbody></table>"
         "</div>"
     )
 

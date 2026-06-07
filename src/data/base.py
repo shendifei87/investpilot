@@ -48,13 +48,6 @@ class BaseFetcher(ABC):
         """
         ...
 
-    def fetch_valuation_metrics(self, ticker: str) -> FetchResult:
-        """Deprecated alias for fetch_valuation_inputs.
-
-        Prefer calling fetch_valuation_inputs directly.
-        """
-        return self.fetch_valuation_inputs(ticker)
-
     def fetch_all(self, ticker: str, period: str = "5y") -> Dict[str, FetchResult]:
         results = {}
         for name, method in [

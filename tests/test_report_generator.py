@@ -42,7 +42,7 @@ class TestMdToHtml:
         md = "| Col1 | Col2 |\n|:-----|:-----|\n| A | B |"
         html = md_to_html(md)
         assert "<table>" in html
-        assert "<th>" in html or "<td>" in html
+        assert "<th" in html or "<td" in html
 
     def test_bold_inline(self):
         md = "This is **bold** text."
@@ -221,8 +221,8 @@ class TestExtractSummaryMetrics:
         ws = Path(tmp) / "TEST"
         ws.mkdir()
 
-        # Step 4 with price and target
-        (ws / "step4_quantitative_model.md").write_text(
+        # Step 6 with price and target
+        (ws / "step6_monte_carlo_simulation.md").write_text(
             "当前股价：150.00\n"
             "Forward PE: 30.0x\n"
             "### T+2\n"
@@ -231,8 +231,8 @@ class TestExtractSummaryMetrics:
             "| P50 目标价 | **200.00** |\n"
         )
 
-        # Step 5 with RRR
-        (ws / "step5_rrr_strategy.md").write_text(
+        # Step 7 with RRR
+        (ws / "step7_rrr_strategy.md").write_text(
             "## RRR Assessment\n"
             "**RRR = 2.5** (based on T+2 Forward)\n"
         )
@@ -249,8 +249,8 @@ class TestExtractSummaryMetrics:
             "composite_grade": "B — Meaningful edge",
         }]))
 
-        # Step 7 with decision
-        (ws / "step7_research_director_review.md").write_text(
+        # Step 9 with decision
+        (ws / "step9_research_director_review.md").write_text(
             "## Investment Committee\n"
             "**Decision: Buy**\n"
         )
@@ -287,7 +287,7 @@ class TestExtractSummaryMetrics:
                 "target_price": "15.00",
                 "rrr": "2.20",
             }))
-            (ws / "step4_quantitative_model.md").write_text(
+            (ws / "step6_monte_carlo_simulation.md").write_text(
                 "当前股价：999.00\n| P50 目标价 | 888.00 |\n"
             )
             metrics = _extract_summary_metrics(str(ws), "SUMMARY_OVERRIDE")
@@ -299,7 +299,7 @@ class TestExtractSummaryMetrics:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "P50_UNLABELED"
             ws.mkdir()
-            (ws / "step4_quantitative_model.md").write_text(
+            (ws / "step6_monte_carlo_simulation.md").write_text(
                 "当前股价：100.00\n"
                 "| **P50** | **2.50** |\n"  # EPS-like row, not target price
             )
@@ -311,7 +311,7 @@ class TestExtractSummaryMetrics:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "PE_TEST"
             ws.mkdir()
-            (ws / "step4_quantitative_model.md").write_text(
+            (ws / "step6_monte_carlo_simulation.md").write_text(
                 "Forward PE: 25.5x\n当前股价：100"
             )
             metrics = _extract_summary_metrics(str(ws), "PE_TEST")
@@ -408,7 +408,7 @@ class TestJsonFirstExtraction:
 
         # Minimal step files (for moat/decision only)
         (ws / "step2_competitive_moat.md").write_text("Narrow Moat, Widening\n")
-        (ws / "step7_research_director_review.md").write_text("Decision: Hold / Wait\n")
+        (ws / "step9_research_director_review.md").write_text("Decision: Hold / Wait\n")
 
         return ws
 
@@ -416,8 +416,8 @@ class TestJsonFirstExtraction:
         """Schema A: p50_target + current_price + rrr from JSON, not regex."""
         with tempfile.TemporaryDirectory() as tmp:
             ws = self._create_json_workspace(tmp, schema="A")
-            # Also create step4 with WRONG values to prove JSON wins
-            (ws / "step4_quantitative_model.md").write_text(
+            # Also create Step 6 markdown with wrong values to prove JSON wins
+            (ws / "step6_monte_carlo_simulation.md").write_text(
                 "当前股价：999.00\nForward PE: 99.0x\n"
             )
             metrics = _extract_summary_metrics(str(ws), "JSON_TEST")
@@ -456,12 +456,12 @@ class TestJsonFirstExtraction:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "REGEX_TEST"
             ws.mkdir()
-            (ws / "step4_quantitative_model.md").write_text(
+            (ws / "step6_monte_carlo_simulation.md").write_text(
                 "当前股价：150.00\nForward PE: 30.0x\n"
             )
-            (ws / "step5_rrr_strategy.md").write_text("RRR = 2.5\n")
+            (ws / "step7_rrr_strategy.md").write_text("RRR = 2.5\n")
             (ws / "step2_competitive_moat.md").write_text("Wide, Widening\n")
-            (ws / "step7_research_director_review.md").write_text("Buy\n")
+            (ws / "step9_research_director_review.md").write_text("Buy\n")
 
             metrics = _extract_summary_metrics(str(ws), "REGEX_TEST")
             assert metrics["current_price"] == "150.00"
@@ -484,7 +484,7 @@ class TestJsonFirstExtraction:
                 "current_percentile": 75.0,
             }))
             (ws / "step2_competitive_moat.md").write_text("")
-            (ws / "step7_research_director_review.md").write_text("")
+            (ws / "step9_research_director_review.md").write_text("")
 
             metrics = _extract_summary_metrics(str(ws), "PE_PRIORITY")
             assert metrics["forward_pe"] == "22.5x"  # from pe_band_data, not calculated_val
@@ -502,7 +502,7 @@ class TestJsonFirstExtraction:
                 "edge_grade": "A",
             }))
             (ws / "step2_competitive_moat.md").write_text("")
-            (ws / "step7_research_director_review.md").write_text("")
+            (ws / "step9_research_director_review.md").write_text("")
 
             metrics = _extract_summary_metrics(str(ws), "EDGE_FB")
             assert metrics["edge_score"] == "7.0"
@@ -523,7 +523,7 @@ class TestJsonFirstExtraction:
                 ]
             }))
             (ws / "step2_competitive_moat.md").write_text("")
-            (ws / "step7_research_director_review.md").write_text("")
+            (ws / "step9_research_director_review.md").write_text("")
 
             metrics = _extract_summary_metrics(str(ws), "EDGE_HIST")
             assert metrics["edge_score"] == "6.5"
@@ -562,9 +562,10 @@ class TestAutoEmbedImages:
             (ws / "monte_carlo_distribution.png").write_bytes(png_data)
 
             sections_html = (
-                '<div id="step4" class="section-card">'
-                '<div class="section-header"><h2>Step 4</h2></div>'
-                '<div class="section-body"><p>Some content</p></div></div>'
+                '<div id="step6" class="section-card">'
+                '<div class="section-header"><h2>Step 6</h2></div>'
+                '<div class="section-body"><p>Some content</p>'
+                '<!-- AUTO_IMAGES:step6 --></div></div>'
             )
 
             result = _auto_embed_workspace_images(ws, sections_html)
@@ -580,7 +581,7 @@ class TestAutoEmbedImages:
 
             # Simulate already-embedded chart (filename stem present in HTML)
             sections_html = (
-                '<div id="step4" class="section-card">'
+                '<div id="step6" class="section-card">'
                 '<div class="section-body">'
                 '<p>monte_carlo_distribution already here</p>'
                 '</div></div>'
@@ -599,8 +600,8 @@ class TestAutoEmbedImages:
 
             body = md_to_html("![Distribution](monte_carlo_distribution.png)", workspace_dir=str(ws))
             sections_html = (
-                '<div id="step4" class="section-card">'
-                '<div class="section-header"><h2>Step 4</h2></div>'
+                '<div id="step6" class="section-card">'
+                '<div class="section-header"><h2>Step 6</h2></div>'
                 f'<div class="section-body">{body}</div></div>'
             )
 
@@ -646,3 +647,341 @@ class TestAutoEmbedImages:
             assert "data:image/png;base64," in result
             assert "Test Chart" in result
             assert "chart-container" in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: nested-dict format support (09992.HK bug fix)
+# ---------------------------------------------------------------------------
+
+class TestNestedDictFormat:
+    """Tests for nested-dict assumption_matrix / segment_revenues format.
+
+    Regression tests for: P50 target showing 6.4 instead of 248.5,
+    and 'str' object has no attribute 'get' in forecast model.
+    """
+
+    def _create_09992_workspace(self, tmp):
+        """Create workspace mimicking 09992.HK nested-dict format."""
+        ws = Path(tmp) / "09992"
+        ws.mkdir()
+
+        # step4_structured_assumptions.json — nested dict format
+        (ws / "step4_structured_assumptions.json").write_text(json.dumps({
+            "ticker": "09992.HK",
+            "base_year": "FY2025",
+            "forward_year": "T1",
+            "hkd_cny": 0.92,
+            "shares_outstanding": 1331723150,
+            "current_price_hkd": 176.4,
+            "current_price_cny": 162.29,
+            "base_revenue_cny_m": 37120,
+            "financial_model_inputs": {
+                "p50_target_hkd": 248.5,
+                "p50_eps_cny": 11.43,
+                "shares_outstanding": 1331723150,
+                "diluted_shares": 1331723150,
+                "hkd_cny": 0.92,
+                "cash": 5000,
+                "debt": 1000,
+                "equity": 22000,
+                "nwc_ratio": 0.10,
+                "ppe_ratio": 0.20,
+                "other_assets_ratio": 0.05,
+                "ap_ratio": 0.06,
+                "dividend_payout": 0.0,
+                "da_ratio": 0.04,
+                "capex_ratio": 0.06,
+                "interest_rate_on_debt": 0.00,
+                "interest_rate_on_cash": 0.00,
+                "annual_share_dilution_pct": 0.0,
+            },
+            "assumption_matrix": {
+                "T1_FY2026E": {
+                    "revenue_growth": {"p10": 0.08, "p30": 0.15, "p50": 0.22, "p70": 0.30, "p90": 0.40},
+                    "gross_margin": {"p10": 0.55, "p50": 0.65, "p90": 0.75},
+                    "opex_ratio": {"p10": 0.10, "p50": 0.18, "p90": 0.25},
+                    "tax_rate": {"p10": 0.10, "p50": 0.15, "p90": 0.20},
+                    "pe_multiple": {"p10": 15, "p30": 18, "p50": 22, "p70": 28, "p90": 35},
+                    "overseas_growth": {"p10": 0.20, "p30": 0.30, "p50": 0.45, "p70": 0.60, "p90": 0.80},
+                },
+                "T2_FY2027E": {
+                    "revenue_growth": {"p10": 0.05, "p30": 0.12, "p50": 0.18, "p70": 0.25, "p90": 0.35},
+                    "gross_margin": {"p50": 0.64},
+                    "opex_ratio": {"p50": 0.17},
+                    "tax_rate": {"p50": 0.15},
+                    "pe_multiple": {"p10": 13, "p30": 16, "p50": 20, "p70": 26, "p90": 32},
+                },
+                "T3_FY2028E": {
+                    "revenue_growth": {"p10": 0.03, "p30": 0.08, "p50": 0.12, "p70": 0.18, "p90": 0.25},
+                    "gross_margin": {"p50": 0.63},
+                    "opex_ratio": {"p50": 0.16},
+                    "tax_rate": {"p50": 0.15},
+                    "pe_multiple": {"p10": 12, "p30": 15, "p50": 18, "p70": 24, "p90": 30},
+                },
+            },
+            "segment_revenues": {
+                "product_level": {
+                    "Plush": {"base": 15000, "p50": 18300, "p50_growth": 0.22},
+                    "Figurines": {"base": 10000, "p50": 12000, "p50_growth": 0.20},
+                    "MEGA": {"base": 8000, "p50": 11000, "p50_growth": 0.375},
+                    "Derivatives": {"base": 4120, "p50": 5000, "p50_growth": 0.213},
+                }
+            },
+            "valuation_source": "all self-calculated from raw financial data",
+            "assumption_consistency": {
+                "revenue_vs_segments": "consistent",
+            },
+            "bridge_analysis": {
+                "base_total": 37120,
+                "p50_total": 46300,
+                "delta": 9180,
+            },
+            "growth_drivers": [],
+            "margin_derivation": {"method": "historical_average"},
+            "contrarian_checks": [],
+        }))
+
+        # Step 6 markdown with a line that used to confuse regex, plus Step 4 for validation.
+        step4_content = (
+            "# Step 6: Monte Carlo Simulation\n\n"
+            "当前股价：176.4 HKD\n\n"
+            "### Monte Carlo Results\n"
+            "| Scenario | PE | EPS | Target (HKD) |\n"
+            "|:---------|:---|:----|:-------------|\n"
+            "| P50 Target | 265.4 HKD | **248.5 HKD** | -6.4% |\n"
+        )
+        (ws / "step6_monte_carlo_simulation.md").write_text(step4_content)
+        (ws / "step4_assumption_research.md").write_text(step4_content)
+        (ws / "_reviewed_assumptions.json").write_text(json.dumps({
+            "reviewed_at": "2026-01-01",
+            "assumptions": {
+                "rev_growth": {"p10": 0.08, "p50": 0.22, "p90": 0.40},
+                "gross_margin": {"p10": 0.55, "p50": 0.65, "p90": 0.75},
+                "opex_ratio": {"p10": 0.10, "p50": 0.18, "p90": 0.25},
+                "tax_rate": {"p10": 0.10, "p50": 0.15, "p90": 0.20},
+                "pe": {"p10": 15, "p50": 22, "p90": 35},
+            },
+        }), encoding="utf-8")
+
+        # Step 7
+        (ws / "step7_rrr_strategy.md").write_text(
+            "## RRR Assessment\n**RRR = 3.2**\n"
+            "P50 Target | 248.5 HKD\n"
+        )
+
+        # Step 2
+        (ws / "step2_competitive_moat.md").write_text("Wide Moat, Widening\n")
+
+        # Step 9
+        (ws / "step9_research_director_review.md").write_text("Decision: Buy\n")
+
+        return ws
+
+    def test_target_price_from_structured_assumptions_json(self):
+        """P50 target must come from step4_structured_assumptions.json, not regex.
+
+        Regression: the regex used to match -6.4% from the table and return 6.4.
+        The JSON has p50_target_hkd: 248.5 — this MUST win.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._create_09992_workspace(tmp)
+            metrics = _extract_summary_metrics(str(ws), "09992")
+
+            assert metrics["target_price"] is not None
+            tp = float(metrics["target_price"])
+            assert tp > 100, f"Target price {tp} looks wrong — should be ~248.5, not 6.4"
+            assert abs(tp - 248.5) < 1.0, f"Expected ~248.5, got {tp}"
+
+    def test_regex_does_not_pick_percentage_as_target(self):
+        """The -6.4% in the markdown table must NOT become the target price."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._create_09992_workspace(tmp)
+            # Remove JSON to force regex fallback
+            (ws / "step4_structured_assumptions.json").unlink()
+            # Also remove any MC JSON
+            for f in ws.glob("monte_carlo_result*.json"):
+                f.unlink()
+
+            metrics = _extract_summary_metrics(str(ws), "09992")
+
+            # If target_price is extracted from regex, it must NOT be 6.4
+            tp = metrics.get("target_price")
+            if tp is not None:
+                tp_val = float(tp)
+                assert tp_val != 6.4, "Regex picked 6.4 from -6.4% — regression!"
+                assert tp_val >= 100, f"Target {tp_val} too low for 176.4 current price"
+
+    def test_financial_model_handles_nested_dict(self):
+        """build_financial_model must not crash on nested-dict assumption_matrix.
+
+        Regression: 'str' object has no attribute 'get'
+        """
+        from src.analysis.financial_model import build_financial_model
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._create_09992_workspace(tmp)
+            # Should NOT raise AttributeError
+            model = build_financial_model(str(ws))
+            assert isinstance(model, dict)
+            assert "statements" in model or "segments" in model
+
+    def test_step4_validate_handles_nested_dict(self):
+        """validate_step4 must not crash on nested-dict assumption_matrix.
+
+        Regression: 'str' object has no attribute 'get' in _validate_assumption_matrix
+        """
+        from src.analysis.step4_validate import validate_step4
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._create_09992_workspace(tmp)
+            # Should NOT raise AttributeError
+            result = validate_step4(str(ws / "step4_assumption_research.md"))
+            assert isinstance(result, dict)
+            assert "passed" in result
+            assert "checks" in result
+
+    def test_step4_validate_handles_dict_valuation_source(self):
+        """valuation_source can be a string — must not crash on .get()."""
+        from src.analysis.step4_validate import validate_step4
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._create_09992_workspace(tmp)
+            result = validate_step4(str(ws / "step4_assumption_research.md"))
+            # Find the valuation_ratios_calculated check
+            val_checks = [c for c in result["checks"]
+                          if c["check"] == "valuation_ratios_calculated"]
+            assert len(val_checks) == 1
+            assert val_checks[0]["status"] == "PASS"
+
+    def test_report_generates_mc_chart_from_p_keys_decimal_ratios(self):
+        """Auto chart generation must support p10/p50 keys and decimal ratios."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "CHART"
+            ws.mkdir()
+            (ws / "step1_business_analysis.md").write_text("# Step 1: CHART\n", encoding="utf-8")
+            (ws / "step4_structured_assumptions.json").write_text(json.dumps({
+                "base_revenue_cny_m": 10000,
+                "current_price_hkd": 100,
+                "financial_model_inputs": {
+                    "shares_outstanding": 100000000,
+                    "diluted_shares": 100000000,
+                    "hkd_cny": 1.0,
+                    "cash": 5000,
+                    "debt": 1000,
+                    "equity": 22000,
+                    "nwc_ratio": 0.10,
+                    "ppe_ratio": 0.20,
+                    "other_assets_ratio": 0.05,
+                    "ap_ratio": 0.06,
+                    "dividend_payout": 0.0,
+                    "da_ratio": 0.04,
+                    "capex_ratio": 0.06,
+                    "interest_rate_on_debt": 0.00,
+                    "interest_rate_on_cash": 0.00,
+                    "annual_share_dilution_pct": 0.0,
+                },
+                "assumption_matrix": {
+                    "T1_FY2026E": {
+                        "revenue_growth": {"p10": 0.05, "p30": 0.10, "p50": 0.15, "p70": 0.20, "p90": 0.25},
+                        "npm": {"p10": 0.10, "p30": 0.12, "p50": 0.15, "p70": 0.18, "p90": 0.20},
+                        "pe_multiple": {"p10": 10, "p30": 12, "p50": 15, "p70": 18, "p90": 22},
+                    },
+                },
+            }), encoding="utf-8")
+
+            generate_report_html(ws, ticker="CHART")
+
+            assert (ws / "monte_carlo_distribution.png").exists()
+
+
+class TestHtmlReportIntegrity:
+    """End-to-end HTML report validation tests.
+
+    These verify that a generated HTML report meets basic integrity standards.
+    Run as a regression suite after any report generator changes.
+    """
+
+    def _minimal_workspace(self, tmp, ticker="TEST"):
+        """Create a workspace with just enough files to generate a report."""
+        ws = Path(tmp) / ticker
+        ws.mkdir()
+
+        # Step 1
+        (ws / "step1_business_analysis.md").write_text(
+            "# Step 1: Business Analysis\n\nTest business description.\n"
+        )
+        # Step 6 with data
+        (ws / "step6_monte_carlo_simulation.md").write_text(
+            "# Step 6: Monte Carlo Simulation\n\n"
+            "当前股价：100.00\nForward PE: 20.0x\n"
+            "### Monte Carlo Results\n"
+            "| P50 Target | 150.00 |\n"
+        )
+        # Step 7
+        (ws / "step7_rrr_strategy.md").write_text(
+            "## RRR Assessment\n**RRR = 2.5**\n"
+        )
+        # Step 2
+        (ws / "step2_competitive_moat.md").write_text("Wide Moat\n")
+        # Step 9
+        (ws / "step9_research_director_review.md").write_text("Decision: Buy\n")
+
+        return ws
+
+    def test_report_html_no_crash_errors(self):
+        """Generated HTML must not contain Python crash error messages."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._minimal_workspace(tmp)
+            path = generate_report_html(ws, ticker="TEST")
+            html = Path(path).read_text(encoding="utf-8")
+
+            # These patterns indicate unhandled exceptions
+            forbidden = [
+                "Traceback (most recent",
+                "AttributeError",
+                "TypeError",
+                "KeyError",
+                "IndexError",
+                "object has no attribute",
+                "not subscriptable",
+            ]
+            for pattern in forbidden:
+                assert pattern not in html, f"HTML contains crash error: {pattern}"
+
+    def test_report_html_has_valid_structure(self):
+        """HTML must have basic structural elements."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._minimal_workspace(tmp)
+            path = generate_report_html(ws, ticker="TEST")
+            html = Path(path).read_text(encoding="utf-8")
+
+            assert "<!DOCTYPE html>" in html
+            assert "<html" in html
+            assert "</html>" in html
+            assert "<head>" in html
+            assert "<body" in html
+
+    def test_report_html_no_broken_target_price(self):
+        """If current price is 100, target should not be <10 or >10000."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._minimal_workspace(tmp)
+            metrics = _extract_summary_metrics(str(ws), "TEST")
+
+            cp = float(metrics.get("current_price", 0))
+            tp = float(metrics.get("target_price", 0))
+            if cp > 0 and tp > 0:
+                ratio = tp / cp
+                assert 0.2 <= ratio <= 10.0, (
+                    f"Target/Current ratio {ratio:.2f} is suspicious — "
+                    f"target={tp}, current={cp}"
+                )
+
+    def test_report_summary_card_has_key_metrics(self):
+        """Summary card must show at least current_price and decision."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = self._minimal_workspace(tmp)
+            path = generate_report_html(ws, ticker="TEST")
+            html = Path(path).read_text(encoding="utf-8")
+
+            assert "100.00" in html  # current price
+            assert "Buy" in html     # decision

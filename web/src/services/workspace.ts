@@ -4,8 +4,9 @@ import {
   WORKSPACES_DIR,
   STEP_FILES,
   STEP_NAMES,
-  CORE_STEP_NUMBERS,
-  DISPLAY_STEP_NUMBERS,
+  CORE_STEP_IDS,
+  DISPLAY_STEP_IDS,
+  type StepId,
   WORKSPACE_NAME_RE,
   MATERIAL_EXTS,
 } from "../config.js";
@@ -23,7 +24,7 @@ export interface StepInfo {
 export interface WorkspaceStatus {
   has_materials: boolean;
   materials: string[];
-  steps: Record<number, StepInfo>;
+  steps: Record<string, StepInfo>;
   completed: number;
   total: number;
   triage_status: string;
@@ -96,26 +97,26 @@ export function workspaceMaterialFiles(wsDir: string): string[] {
 export function getWorkspaceStatus(wsDir: string): WorkspaceStatus {
   const materialFiles = workspaceMaterialFiles(wsDir);
   const hasMaterials = materialFiles.length > 0;
-  const steps: Record<number, StepInfo> = {};
+  const steps: Record<string, StepInfo> = {};
   let completed = 0;
 
-  for (const n of DISPLAY_STEP_NUMBERS) {
-    const fileName = STEP_FILES[n]!;
+  for (const n of DISPLAY_STEP_IDS) {
+    const fileName = STEP_FILES[n];
     const done = fs.existsSync(path.join(wsDir, fileName));
-    if (CORE_STEP_NUMBERS.includes(n as (typeof CORE_STEP_NUMBERS)[number]) && done) {
+    if (CORE_STEP_IDS.includes(n as (typeof CORE_STEP_IDS)[number]) && done) {
       completed++;
     }
     steps[n] = {
-      name: STEP_NAMES[n]!,
+      name: STEP_NAMES[n as StepId],
       file: fileName,
       status: done ? "completed" : "pending",
     };
   }
 
-  const triageDone = steps[0]!.status === "completed";
+  const triageDone = steps["0"]!.status === "completed";
   let status: WorkspaceStatus["status"] = "empty";
   if (completed > 0) status = "in_progress";
-  if (completed === CORE_STEP_NUMBERS.length) status = "completed";
+  if (completed === CORE_STEP_IDS.length) status = "completed";
   else if (triageDone && completed === 0) status = "triaged";
   else if (hasMaterials && completed === 0) status = "ready";
 
@@ -124,8 +125,8 @@ export function getWorkspaceStatus(wsDir: string): WorkspaceStatus {
     materials: materialFiles,
     steps,
     completed,
-    total: CORE_STEP_NUMBERS.length,
-    triage_status: steps[0]!.status,
+    total: CORE_STEP_IDS.length,
+    triage_status: steps["0"]!.status,
     status,
   };
 }

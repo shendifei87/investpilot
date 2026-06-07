@@ -5,6 +5,8 @@ Contains the CSS stylesheet, JavaScript, HTML skeleton, and step
 configuration used to produce self-contained HTML research reports.
 """
 
+from src.contracts import report_step_config
+
 # ---------------------------------------------------------------------------
 # Inline CSS
 # ---------------------------------------------------------------------------
@@ -216,54 +218,4 @@ HTML_SKELETON = """\
 # Step configuration
 # ---------------------------------------------------------------------------
 
-STEP_CONFIG = [
-    {
-        "key": "step0",
-        "file": "step0_quick_triage.md",
-        "icon": "fas fa-filter",
-        "title": "Step 0: 快速筛选",
-        "optional": True,
-    },
-    {
-        "key": "step1",
-        "file": "step1_business_analysis.md",
-        "icon": "fas fa-building",
-        "title": "Step 1: 业务面深入研究",
-    },
-    {
-        "key": "step2",
-        "file": "step2_competitive_moat.md",
-        "icon": "fas fa-shield-halved",
-        "title": "Step 2: 竞争壁垒与护城河",
-    },
-    {
-        "key": "step3",
-        "file": "step3_marginal_changes.md",
-        "icon": "fas fa-arrows-spin",
-        "title": "Step 3: 边际变化与预期差",
-    },
-    {
-        "key": "step4",
-        "file": "step4_quantitative_model.md",
-        "icon": "fas fa-chart-line",
-        "title": "Step 4: 量化基本面建模",
-    },
-    {
-        "key": "step5",
-        "file": "step5_rrr_strategy.md",
-        "icon": "fas fa-scale-balanced",
-        "title": "Step 5: RRR 估算与交易策略",
-    },
-    {
-        "key": "step6",
-        "file": "step6_auditing.md",
-        "icon": "fas fa-clipboard-check",
-        "title": "Step 6: 审计",
-    },
-    {
-        "key": "step7",
-        "file": "step7_research_director_review.md",
-        "icon": "fas fa-user-tie",
-        "title": "Step 7: 研究总监审核",
-    },
-]
+STEP_CONFIG = report_step_config()

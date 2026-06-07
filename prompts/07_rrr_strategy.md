@@ -1,16 +1,36 @@
-# Step 5: RRR Estimation & Trading Strategy
+# Step 7: RRR Estimation & Trading Strategy
 
 You are a hedge fund manager designing a trading strategy based on the quantitative model results. Purely fundamentally driven, no technical analysis.
 
+## Workflow Guard
+
+Run before analysis:
+
+```bash
+python -m src.cli workflow {workspace_dir} start --step 7
+```
+
+After the artifact is written:
+
+```bash
+python -m src.cli workflow {workspace_dir} complete --step 7 --artifact step7_rrr_strategy.md --summary "RRR and trading strategy completed"
+```
+
+If Step 6 simulation results or current-price inputs are missing, block Step 7:
+
+```bash
+python -m src.cli workflow {workspace_dir} block --step 7 --reason "missing simulation distribution or RRR inputs"
+```
+
 ## RRR Calculation
 
-Extract data from Step 4's simulation target price probability distribution and calculate:
+Extract data from Step 6's simulation target price probability distribution and calculate:
 
 ```
 RRR = P_up × E[upside] / P_down × E[downside]
 ```
 
-**Target price distribution must be based on Forward EPS (consistent with Step 4).**
+**Target price distribution must be based on Forward EPS (consistent with Step 4 assumptions, Step 5 financial model, and Step 6 simulation).**
 
 ## Forward Year Dual Calculation (Mandatory)
 
@@ -120,3 +140,34 @@ If recommending waiting for a pullback entry, **RRR must be recalculated at the 
 1. [Metric] — Threshold [X]
 2. [Metric] — Threshold [X]
 ```
+
+---
+
+## MCP 流动性数据
+
+在撰写 Step 7 交易策略之前，调用以下 MCP 工具获取流动性数据，辅助入场/出场判断。
+
+### 数据获取步骤
+
+```
+1. mcp__tushareMcp__daily(ts_code="{ts_code}", start_date="{30天前}", end_date="{今天}")
+   → 近 30 天日度成交量和成交额
+   → 用于计算日均成交额，判断建仓所需天数
+
+2. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{20天前}", end_date="{今天}")
+   → 近 20 天资金流向（大单/中单/小单净额）
+   → 用于判断当前资金方向：左侧入场需等大单企稳
+
+3. mcp__tushareMcp__stk_limit(ts_code="{ts_code}", start_date="{今天}")
+   → 涨跌停价格（用于止损/止盈价位参考）
+
+4. mcp__tushareMcp__top_list(trade_date="{最近交易日}")
+   → 龙虎榜数据（如目标公司上榜，判断游资/机构参与度）
+```
+
+### 注意事项
+
+1. 流动性数据辅助入场时机判断，不改变基本面 RRR 计算结果
+2. 市场适配：
+   - **港股**：使用 AKShare `stock_hk_daily_em(symbol)` 获取近 30 天成交量/成交额；`stock_hk_spot_em()` 获取实时行情。Tushare `moneyflow_hsgt` 仍可用于南向资金方向判断。
+   - **美股**：使用 AKShare `stock_us_daily(symbol)` 获取近 30 天成交量/成交额。资金流向需通过 WebSearch 从东方财富等获取。

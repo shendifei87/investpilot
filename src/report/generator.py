@@ -1,11 +1,15 @@
+import mistune
 import re
 import json
 import base64
+import logging
 from html import escape
 import numpy as np
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def generate_distribution_chart(
@@ -39,6 +43,118 @@ def generate_distribution_chart(
         save_path = Path(f"distribution_{timestamp}.png")
 
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(save_path)
+
+
+def generate_distribution_from_percentiles(
+    p10: float,
+    p30: float,
+    p50: float,
+    p70: float,
+    p90: float,
+    title: str = "Monte Carlo Target Price Distribution",
+    current_price: float = None,
+    save_path: Path = None,
+    currency: str = "HKD",
+    n_samples: int = 50000,
+) -> str:
+    """Synthesize a target-price distribution from percentile inputs.
+
+    Uses a skew-normal distribution calibrated so that P50 sits near the
+    visual center of the chart (not buried in the left tail).  The x-axis
+    range is bounded by P10 and P90 with moderate padding, ensuring the
+    right tail is not excessively long.
+
+    Args:
+        p10, p30, p50, p70, p90: Percentile values (e.g. target prices).
+        title: Chart title.
+        current_price: Current market price (vertical line).
+        save_path: Output PNG path.  Auto-generated if None.
+        currency: Currency label for axis.
+        n_samples: Number of synthetic samples.
+
+    Returns:
+        str: Path to saved PNG file.
+    """
+    from scipy.stats import skewnorm
+
+    # --- Calibrate skew-normal to match P10 / P50 / P90 ---
+    # We use scipy.optimize to find (a, loc, scale) such that the
+    # skew-normal percentiles match the supplied ones.
+    from scipy.optimize import minimize
+
+    target_pcts = np.array([10, 50, 90])
+    target_vals = np.array([p10, p50, p90])
+
+    def _loss(params):
+        a, loc, scale = params
+        if scale <= 0:
+            return 1e12
+        fitted = skewnorm.ppf(target_pcts / 100.0, a, loc=loc, scale=scale)
+        return np.sum((fitted - target_vals) ** 2)
+
+    # Initial guess: use the spread between P10 and P90 as scale
+    spread = p90 - p10
+    init_loc = p50
+    init_scale = spread / 3.0
+    result = minimize(_loss, x0=[0.0, init_loc, init_scale],
+                      method="Nelder-Mead", options={"maxiter": 5000})
+    a_opt, loc_opt, scale_opt = result.x
+    if scale_opt <= 0:
+        scale_opt = init_scale
+
+    # Generate synthetic samples
+    samples = skewnorm.rvs(a_opt, loc=loc_opt, scale=scale_opt,
+                           size=n_samples, random_state=42)
+
+    # --- Plot ---
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 6), facecolor="white")
+    ax.set_facecolor("white")
+
+    # Determine x-axis bounds: P10 to P90 with 30% padding each side
+    x_low = p10 - 0.30 * (p50 - p10)
+    x_high = p90 + 0.30 * (p90 - p50)
+    # Clip any samples outside visible range for clean histogram
+    visible = samples[(samples >= x_low) & (samples <= x_high)]
+
+    ax.hist(visible, bins=80, density=True, alpha=0.7,
+            color="#4361ee", edgecolor="white", linewidth=0.3)
+
+    # Percentile lines
+    pct_data = {10: (p10, "#e63946", "P10 (Bear)"),
+                30: (p30, "#f4a261", "P30"),
+                50: (p50, "#2a9d8f", "P50 (Base)"),
+                70: (p70, "#f4a261", "P70"),
+                90: (p90, "#e63946", "P90 (Bull)")}
+    for pct, (val, color, label) in pct_data.items():
+        ax.axvline(val, color=color, linestyle="--", linewidth=1.5, alpha=0.85,
+                   label=f"{label}: {val:.1f} {currency}")
+
+    # Current price
+    if current_price is not None:
+        ax.axvline(current_price, color="black", linewidth=2.5,
+                   label=f"Current: {current_price:.1f} {currency}")
+
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(f"Target Price ({currency})", fontsize=11)
+    ax.set_ylabel("Probability Density", fontsize=11)
+    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
+    ax.grid(axis="y", alpha=0.3, linestyle=":")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_xlim(x_low, x_high)
+
+    plt.tight_layout()
+
+    if save_path is None:
+        save_path = Path("monte_carlo_distribution.png")
+
+    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return str(save_path)
 
@@ -141,36 +257,6 @@ def generate_pe_band_chart(
 # HTML report generation: markdown-to-HTML converter + helpers
 # ---------------------------------------------------------------------------
 
-def _convert_inline(text: str) -> str:
-    """Convert inline markdown: **bold** -> <strong>, `code` -> <code>."""
-    text = escape(str(text), quote=True)
-    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
-    return text
-
-
-def _convert_table(lines: list) -> str:
-    """Convert pipe-delimited markdown table to HTML table."""
-    if len(lines) < 2:
-        return ''
-    rows = []
-    for line in lines:
-        cells = [c.strip() for c in line.strip().strip('|').split('|')]
-        rows.append(cells)
-    # Remove separator rows (|:---|:---|)
-    data_rows = [r for r in rows if not all(re.match(r'^:?-+:?$', c.strip()) for c in r)]
-    if not data_rows:
-        return ''
-    header = ''.join(f'<th>{_convert_inline(c)}</th>' for c in data_rows[0])
-    html = f'<thead><tr>{header}</tr></thead>'
-    body = ''
-    for row in data_rows[1:]:
-        cells = ''.join(f'<td>{_convert_inline(c)}</td>' for c in row)
-        body += f'<tr>{cells}</tr>'
-    html += f'<tbody>{body}</tbody>'
-    return f'<table>{html}</table>'
-
-
 def _safe_workspace_file(workspace_dir: Path, user_path: str) -> Optional[Path]:
     """Resolve a markdown asset path and require it to stay under workspace."""
     resolved = (workspace_dir / user_path).resolve()
@@ -193,108 +279,55 @@ def _image_mime(img_path: Path) -> str:
     }.get(suffix, "image/png")
 
 
-def _convert_image(line: str, workspace_dir) -> str:
-    """Convert ![alt](file.png) to base64-embedded <img>."""
-    m = re.match(r'!\[([^\]]*)\]\(([^)]+)\)', line.strip())
-    if not m:
-        return f'<p>{_convert_inline(line.strip())}</p>'
-    alt, src = m.group(1), m.group(2)
-    if workspace_dir:
-        img_path = _safe_workspace_file(workspace_dir, src)
-        if img_path is not None and img_path.exists():
-            if img_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
-                return f'<p><em>Image not found: {escape(src, quote=True)}</em></p>'
-            data = base64.b64encode(img_path.read_bytes()).decode('ascii')
-            alt_html = escape(alt, quote=True)
-            source_html = escape(img_path.name, quote=True)
-            mime = _image_mime(img_path)
-            return (f'<div class="chart-container">'
-                    f'<img data-source="{source_html}" src="data:{mime};base64,{data}" alt="{alt_html}">'
-                    f'<p class="chart-caption">{alt_html}</p></div>')
-    return f'<p><em>Image not found: {escape(src, quote=True)}</em></p>'
+class _ResearchReportRenderer(mistune.HTMLRenderer):
+    """Custom mistune renderer for InvestPilot research reports.
+
+    - Offsets heading levels (## → h3) to leave room for section headers.
+    - Skips top-level # headings (step titles are rendered in section headers).
+    - Base64-encodes local images referenced in markdown.
+    """
+
+    def __init__(self, workspace_dir=None):
+        super().__init__()
+        self._ws = Path(workspace_dir) if workspace_dir else None
+
+    def heading(self, text, level, **attrs):
+        if level == 1:
+            return ""
+        tag = f"h{min(level + 1, 6)}"
+        return f"<{tag}>{text}</{tag}>\n"
+
+    def image(self, text, url, title=None):
+        alt = text or ""
+        if self._ws:
+            img_path = _safe_workspace_file(self._ws, url)
+            if img_path is not None and img_path.exists():
+                if img_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                    data = base64.b64encode(img_path.read_bytes()).decode("ascii")
+                    mime = _image_mime(img_path)
+                    return (
+                        '<div class="chart-container">'
+                        f'<img data-source="{escape(img_path.name, quote=True)}" '
+                        f'src="data:{mime};base64,{data}" alt="{escape(alt, quote=True)}">'
+                        f'<p class="chart-caption">{escape(alt, quote=True)}</p></div>'
+                    )
+        return f'<p><em>Image not found: {escape(url, quote=True)}</em></p>'
 
 
 def md_to_html(md_text: str, workspace_dir=None) -> str:
-    """Convert InvestPilot step markdown to structured HTML.
+    """Convert InvestPilot step markdown to structured HTML via mistune.
 
-    Handles: tables, h2-h4, bold, unordered/ordered lists,
-    blockquotes, horizontal rules, inline images (base64).
+    Uses a custom renderer that offsets headings, base64-embeds local images,
+    and preserves all standard markdown features (tables, code blocks, links,
+    nested lists, blockquotes) handled correctly by the mistune engine.
     """
-    from pathlib import Path
-    ws = Path(workspace_dir) if workspace_dir else None
-    lines = md_text.split('\n')
-    html_parts = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-
-        if not stripped:
-            i += 1
-            continue
-
-        # Skip the top-level # heading (step title, already in section header)
-        if stripped.startswith('# ') and not stripped.startswith('## '):
-            i += 1
-            continue
-
-        # Headings: ##### -> h6, #### -> h5, ### -> h4, ## -> h3
-        # Check longest match first to avoid ##### being caught by ####
-        if stripped.startswith('#####'):
-            html_parts.append(f'<h6>{_convert_inline(stripped[5:].strip())}</h6>')
-            i += 1
-        elif stripped.startswith('####'):
-            html_parts.append(f'<h5>{_convert_inline(stripped[4:].strip())}</h5>')
-            i += 1
-        elif stripped.startswith('###'):
-            html_parts.append(f'<h4>{_convert_inline(stripped[3:].strip())}</h4>')
-            i += 1
-        elif stripped.startswith('##'):
-            html_parts.append(f'<h3>{_convert_inline(stripped[2:].strip())}</h3>')
-            i += 1
-        elif stripped == '---':
-            html_parts.append('<hr>')
-            i += 1
-        elif stripped.startswith('|'):
-            table_lines = []
-            while i < len(lines) and lines[i].strip().startswith('|'):
-                table_lines.append(lines[i].strip())
-                i += 1
-            html_parts.append(_convert_table(table_lines))
-        elif stripped.startswith('>'):
-            quote_lines = []
-            while i < len(lines) and lines[i].strip().startswith('>'):
-                quote_lines.append(lines[i].strip().lstrip('>').strip())
-                i += 1
-            quote_text = '<br>'.join(_convert_inline(l) for l in quote_lines if l)
-            html_parts.append(f'<blockquote>{quote_text}</blockquote>')
-        elif stripped.startswith('- ') or stripped.startswith('* '):
-            items = []
-            prefix = '- ' if stripped.startswith('- ') else '* '
-            while i < len(lines) and (lines[i].strip().startswith('- ') or lines[i].strip().startswith('* ')):
-                pfx = '- ' if lines[i].strip().startswith('- ') else '* '
-                items.append(_convert_inline(lines[i].strip()[len(pfx):]))
-                i += 1
-            html_parts.append('<ul>' + ''.join(f'<li>{it}</li>' for it in items) + '</ul>')
-        elif re.match(r'^\d+\.\s', stripped):
-            items = []
-            while i < len(lines) and re.match(r'^\d+\.\s', lines[i].strip()):
-                text = re.sub(r'^\d+\.\s', '', lines[i].strip())
-                items.append(_convert_inline(text))
-                i += 1
-            html_parts.append('<ol>' + ''.join(f'<li>{it}</li>' for it in items) + '</ol>')
-        elif re.match(r'!\[.*\]\(', stripped):
-            html_parts.append(_convert_image(stripped, ws))
-            i += 1
-        else:
-            html_parts.append(f'<p>{_convert_inline(stripped)}</p>')
-            i += 1
-
-    return '\n'.join(html_parts)
+    renderer = _ResearchReportRenderer(workspace_dir)
+    markdown = mistune.create_markdown(renderer=renderer, plugins=["table", "strikethrough", "task_lists", "speedup"])
+    return markdown(md_text)
 
 
 # ---------------------------------------------------------------------------
-# Summary metrics extraction — JSON-first with markdown regex fallback
+# Summary metrics extraction — JSON-first with canonical markdown parsing
 # ---------------------------------------------------------------------------
 
 def _read_json_safe(ws: Path, filename: str):
@@ -311,18 +344,258 @@ def _read_json_safe(ws: Path, filename: str):
         return None
 
 
+def _normalize_mc_json(mc: dict) -> dict:
+    """Normalize any Monte Carlo JSON schema to a canonical dict.
+
+    Canonical keys: current_price, p50_target, rrr, target_price_percentiles.
+    Handles Schema A (top-level p50_target), B (target_price_percentiles.50),
+    C (target_price.50), D (nested rrr.rrr).
+    """
+    if not isinstance(mc, dict):
+        return {}
+    result = {}
+
+    # current_price — same in all schemas
+    cp = mc.get("current_price")
+    if cp is not None:
+        result["current_price"] = cp
+
+    # p50_target — Schema A has it at top level; B/D have target_price_percentiles.50; C has target_price.50
+    if mc.get("p50_target") is not None:
+        result["p50_target"] = mc["p50_target"]
+    elif isinstance(mc.get("target_price_percentiles"), dict):
+        tp = mc["target_price_percentiles"]
+        result["target_price_percentiles"] = tp
+        if tp.get("50") is not None:
+            result["p50_target"] = tp["50"]
+    elif isinstance(mc.get("target_price"), dict):
+        tp = mc["target_price"]
+        result["target_price_percentiles"] = tp
+        if tp.get("50") is not None:
+            result["p50_target"] = tp["50"]
+
+    # rrr — Schema A/C: top-level float; Schema D: nested rrr.rrr
+    rrr = mc.get("rrr")
+    if isinstance(rrr, (int, float)):
+        result["rrr"] = rrr
+    elif isinstance(rrr, dict) and rrr.get("rrr") is not None:
+        result["rrr"] = rrr["rrr"]
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Per-metric extractors (split from _extract_summary_metrics for readability)
+# ---------------------------------------------------------------------------
+
+def _extract_current_price(ws: Path, mc: dict, cv: dict | None, read_model_text) -> str | None:
+    """Extract current_price from JSON artifacts or markdown."""
+    if mc.get('current_price'):
+        return str(mc['current_price'])
+    if cv and isinstance(cv, dict):
+        if 'price_hkd' in cv:
+            return str(cv['price_hkd'])
+        if isinstance(cv.get('pe_trailing'), dict) and cv['pe_trailing'].get('price'):
+            return str(cv['pe_trailing']['price'])
+    vcp = _read_json_safe(ws, 'valuation_current_price.json')
+    if vcp is not None and isinstance(vcp, (int, float)):
+        return str(vcp)
+    s4 = read_model_text()
+    for pattern in (
+        r'当前价[格：:]*\s*[~～]?HKD\s*([\d.]+)',
+        r'当前股价[：:]\s*[~～]?([\d.]+)',
+        r'当前价格[：:]\s*[~～]?([\d.]+)',
+        r'\|\s*当前价[^|]*\|\s*([\d.]+)',
+        r'当前价[^(|\n]*?([\d]+\.[\d]+)',
+    ):
+        m = re.search(pattern, s4)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _extract_target_price(ws: Path, mc: dict, sa: dict | None, read_model_text) -> str | None:
+    """Extract P50 target_price from JSON artifacts or markdown."""
+    if mc.get('p50_target') is not None:
+        tp = mc['p50_target']
+        return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+    if sa and isinstance(sa, dict):
+        fmi = sa.get('financial_model_inputs', {})
+        if fmi.get('p50_target_hkd') is not None:
+            tp = fmi['p50_target_hkd']
+            return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+        if fmi.get('p50_eps_cny') is not None:
+            eps = fmi.get('p50_eps_cny', 0)
+            fx = fmi.get('hkd_cny', 1.0)
+            _am = sa.get('assumption_matrix', {})
+            if not isinstance(_am, dict):
+                _am = {}
+            for period_key in ('T1_FY2026E', 'T1', 'FY1'):
+                period = _am.get(period_key, {})
+                pe_dist = period.get('pe_multiple', period.get('pe', {}))
+                if isinstance(pe_dist, dict):
+                    p50_pe = pe_dist.get('p50', pe_dist.get('50'))
+                    if p50_pe and eps and fx:
+                        return f"{eps * p50_pe / fx:.2f}"
+    # Regex fallback
+    s4 = read_model_text()
+    target_keywords = ("目标价", "target price", "target_price", "p50 target", "p50目标价")
+    labeled_candidates = []
+    for line in s4.splitlines():
+        low = line.lower()
+        if "p50" not in low:
+            continue
+        if not any(kw in low for kw in target_keywords):
+            continue
+        nums = re.findall(r'(?<![-\d.])(\d+(?:\.\d+)?)(?![%\d.])', line)
+        for num in nums:
+            try:
+                if float(num) >= 10.0:
+                    labeled_candidates.append(num)
+            except ValueError:
+                continue
+    header_tp = None
+    m = re.search(r'P50\s*目标价[：:]*\s*[~～]?([\d.]+)', s4)
+    if m and float(m.group(1)) >= 1.0:
+        header_tp = m.group(1)
+    compute_tp = None
+    m = re.search(r'[Tt]arget\s*=\s*[\d.]+\s*[*×/]\s*[\d.]+\s*/\s*[\d.]+\s*=\s*([\d.]+)\s*HKD', s4)
+    if m:
+        compute_tp = m.group(1)
+    if compute_tp and float(compute_tp) >= 10.0:
+        return compute_tp
+    if labeled_candidates:
+        labeled_candidates.sort(key=lambda x: float(x), reverse=True)
+        return labeled_candidates[0]
+    if header_tp:
+        return header_tp
+    m = re.search(
+        r'(?:P50\s*)?(?:目标价|target price)[：:\s|]*\*{0,2}([\d.]+)\*{0,2}',
+        s4, re.IGNORECASE,
+    )
+    return m.group(1) if m else None
+
+
+def _extract_forward_pe(ws: Path, peb: dict | None, cv: dict | None, read_model_text) -> str | None:
+    """Extract forward PE from JSON artifacts or markdown."""
+    if peb and isinstance(peb, dict) and 'current_forward_pe' in peb:
+        return f"{peb['current_forward_pe']:.1f}x"
+    if cv and isinstance(cv, dict):
+        for key in ('pe_forward', 'pe_forward_t2_ngaap', 'pe_forward_t1_ngaap',
+                    'pe_forward_t2', 'pe_forward_t1', 'pe_ttm_ngaap', 'pe_ttm'):
+            if key in cv and cv[key]:
+                v = cv[key]
+                if isinstance(v, dict):
+                    pe_value = v.get('pe', v.get('value'))
+                    if pe_value is not None:
+                        return f"{pe_value:.1f}x" if isinstance(pe_value, (int, float)) else str(pe_value) + 'x'
+                elif isinstance(v, (int, float)):
+                    return f"{v:.1f}x"
+                else:
+                    return str(v) + 'x'
+    s4 = read_model_text()
+    for pattern in (
+        r'当前\s*Forward\s*PE[：:]*\s*([\d.]+)x',
+        r'P50\s*Forward\s*PE[^*]*?\*{0,2}([\d.]+)x',
+        r'Forward\s*PE\s*\|[^|]*?([\d.]+)x',
+        r'PE\(Forward[^)]*\)[^(]*?([\d.]+)x',
+        r'Forward PE[^(]*?([\d.]+)x',
+    ):
+        m = re.search(pattern, s4)
+        if m:
+            return m.group(1) + 'x'
+    return None
+
+
+def _extract_rrr(mc: dict, read_file) -> str | None:
+    """Extract RRR from JSON or Step 7 markdown."""
+    if mc.get('rrr') is not None:
+        rrr_val = mc['rrr']
+        return f"{rrr_val:.2f}" if isinstance(rrr_val, float) else str(rrr_val)
+    s5 = read_file('step7_rrr_strategy.md')
+    for pattern in (
+        r'\*\*RRR[^*]*\*\*\s*\|?\s*\*{0,2}([\d.]+)\*{0,2}',
+        r'RRR\s*[=：:]\s*\*{0,2}([\d.]+)\*{0,2}',
+        r'RRR\s*\([^)]*\)\s*[=：:]?\s*([\d.]+)',
+        r'RRR.{0,30}?([\d]+\.[\d]+)',
+    ):
+        m = re.search(pattern, s5)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _extract_moat(ws: Path, read_file) -> str | None:
+    """Extract moat classification from Step 2 markdown."""
+    s2 = read_file('step2_competitive_moat.md')
+    m = re.search(r'(Wide|Narrow|None)\s*(?:Moat)?\s*,?\s*(Widening|Stable|Narrowing)', s2, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)} {m.group(2)}"
+    if re.search(r'Narrow', s2):
+        return 'Narrow'
+    return None
+
+
+def _extract_edge_score(ws: Path, thesis: dict | None) -> tuple[str | None, str | None]:
+    """Extract edge_score and edge_grade from JSON artifacts."""
+    ej = ws / 'edge_score.json'
+    if ej.exists():
+        try:
+            data = json.loads(ej.read_text(encoding='utf-8'))
+            if isinstance(data, list):
+                data = data[-1]
+            return str(data.get('composite', data.get('edge_score', ''))), data.get('composite_grade', data.get('grade', ''))
+        except Exception:
+            pass
+    if thesis and isinstance(thesis, dict):
+        t = thesis
+        if 'history' in t and isinstance(t['history'], list) and t['history']:
+            latest = t['history'][-1]
+            if 'edge_score' in latest:
+                return str(latest['edge_score']), latest.get('edge_grade', '')
+        if 'edge_score' in t:
+            return str(t['edge_score']), t.get('edge_grade', '')
+    return None, None
+
+
+def _extract_decision(ws: Path, read_file) -> str | None:
+    """Extract decision from Step 9 markdown."""
+    s7 = read_file('step9_research_director_review.md')
+    m = re.search(r'\b(Buy|Hold|Pass)\b', s7)
+    return m.group(1) if m else None
+
+
+def _sanity_check_metrics(metrics: dict, ws: Path, sa: dict | None, read_file):
+    """Validate extracted metrics and attempt recovery if ratios look wrong."""
+    current_price = float(metrics.get('current_price', 0)) if metrics.get('current_price') else 0
+    target_price = float(metrics.get('target_price', 0)) if metrics.get('target_price') else 0
+    if current_price > 0 and target_price > 0:
+        ratio = target_price / current_price
+        if ratio < 0.3 or ratio > 5.0:
+            logger.warning(
+                "Extracted target_price=%s vs current_price=%s (ratio=%.2f) looks unreasonable. "
+                "Attempting structured JSON recovery.",
+                target_price, current_price, ratio,
+            )
+            if sa and isinstance(sa, dict):
+                fmi_rec = sa.get('financial_model_inputs', {})
+                recovered = fmi_rec.get('p50_target_hkd')
+                if recovered is not None:
+                    metrics['target_price'] = f"{recovered:.2f}" if isinstance(recovered, float) else str(recovered)
+                    logger.info("Recovered target_price=%s from step4_structured_assumptions.json", metrics['target_price'])
+            if float(metrics.get('target_price', 0)) / current_price < 0.3:
+                s5 = read_file('step7_rrr_strategy.md')
+                m5 = re.search(r'P50\s+Target\s*\|\s*([\d.]+)\s*HKD', s5)
+                if m5 and float(m5.group(1)) >= current_price * 0.3:
+                    metrics['target_price'] = m5.group(1)
+
+
 def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
-    """Extract key metrics from workspace JSON artifacts first, then regex fallback.
+    """Extract key metrics from workspace JSON artifacts first, then markdown parsing.
 
     Priority order for each metric:
       1. Structured JSON files (monte_carlo_results.json, pe_band_data.json, etc.)
-      2. Markdown regex parsing of step files (backward compatibility)
-
-    Supported JSON schemas (multi-workspace compatibility):
-      monte_carlo_results.json (Schema A): p50_target, current_price, rrr, kelly_*
-      monte_carlo_results.json (Schema B): target_price_percentiles.50
-      monte_carlo_results.json (Schema C): target_price.50, rrr, kelly_half_pct
-      monte_carlo_result.json  (Schema D): rrr.rrr, rrr.kelly_half (singular filename)
+      2. Markdown regex parsing of canonical step files
     """
     ws = Path(workspace_dir)
     metrics = {}
@@ -331,223 +604,71 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
         p = ws / name
         return p.read_text(encoding='utf-8') if p.exists() else ''
 
-    def _normalize_summary_value(value):
-        if value is None:
-            return None
-        return str(value)
+    def _read_model_text():
+        chunks = [
+            _read_file(name)
+            for name in (
+                'step4_assumption_research.md',
+                'step5_financial_model.md',
+                'step6_monte_carlo_simulation.md',
+            )
+        ]
+        return '\n\n'.join(chunk for chunk in chunks if chunk)
 
     # ── Load all available JSON artifacts ──────────────────────────────────
     for summary_name in ('summary_metrics.json', 'report_metrics.json'):
         summary = _read_json_safe(ws, summary_name)
         if isinstance(summary, dict):
             for key, value in summary.items():
-                normalized = _normalize_summary_value(value)
-                if normalized not in (None, ''):
-                    metrics[key] = normalized
+                if value is not None:
+                    metrics[key] = str(value)
             break
 
-    mc = _read_json_safe(ws, 'monte_carlo_results.json')
-    if mc is None:
-        mc = _read_json_safe(ws, 'monte_carlo_result.json')  # singular variant
+    mc_raw = _read_json_safe(ws, 'monte_carlo_results.json')
+    if mc_raw is None:
+        mc_raw = _read_json_safe(ws, 'monte_carlo_result.json')
+    mc = _normalize_mc_json(mc_raw) if isinstance(mc_raw, dict) else {}
     cv = _read_json_safe(ws, 'calculated_valuation.json')
     peb = _read_json_safe(ws, 'pe_band_data.json')
     thesis = _read_json_safe(ws, 'thesis.json')
+    sa = _read_json_safe(ws, 'step4_structured_assumptions.json')
 
-    # ── current_price ──────────────────────────────────────────────────────
-    # Priority 1: monte_carlo JSON (Schema A/D have current_price at top level)
-    if 'current_price' not in metrics and mc and isinstance(mc, dict) and mc.get('current_price'):
-        metrics['current_price'] = str(mc['current_price'])
-    # Priority 2: calculated_valuation.json
-    elif 'current_price' not in metrics and cv and isinstance(cv, dict):
-        if 'price_hkd' in cv:
-            metrics['current_price'] = str(cv['price_hkd'])
-        elif isinstance(cv.get('pe_trailing'), dict) and cv['pe_trailing'].get('price'):
-            metrics['current_price'] = str(cv['pe_trailing']['price'])
-    # Priority 3: valuation_current_price.json (scalar file)
+    # ── Extract each metric ────────────────────────────────────────────────
     if 'current_price' not in metrics:
-        vcp = _read_json_safe(ws, 'valuation_current_price.json')
-        if vcp is not None and isinstance(vcp, (int, float)):
-            metrics['current_price'] = str(vcp)
-    # Fallback: regex from step4 markdown
-    if 'current_price' not in metrics:
-        s4 = _read_file('step4_quantitative_model.md')
-        for pattern in (
-            r'当前价[格：:]*\s*[~～]?HKD\s*([\d.]+)',
-            r'当前股价[：:]\s*[~～]?([\d.]+)',
-            r'当前价格[：:]\s*[~～]?([\d.]+)',
-            r'\|\s*当前价[^|]*\|\s*([\d.]+)',
-            r'当前价[^(|\n]*?([\d]+\.[\d]+)',
-        ):
-            m = re.search(pattern, s4)
-            if m:
-                metrics['current_price'] = m.group(1)
-                break
+        cp = _extract_current_price(ws, mc, cv, _read_model_text)
+        if cp:
+            metrics['current_price'] = cp
 
-    # ── target_price (P50 target) ──────────────────────────────────────────
-    if 'target_price' not in metrics and mc and isinstance(mc, dict):
-        tp = None
-        # Schema A: p50_target (top-level)
-        if 'p50_target' in mc and mc['p50_target'] is not None:
-            tp = mc['p50_target']
-        # Schema B/D: target_price_percentiles.50
-        elif isinstance(mc.get('target_price_percentiles'), dict):
-            tp = mc['target_price_percentiles'].get('50')
-        # Schema C: target_price.50
-        elif isinstance(mc.get('target_price'), dict):
-            tp = mc['target_price'].get('50')
-        if tp is not None:
-            metrics['target_price'] = f"{tp:.2f}" if isinstance(tp, float) else str(tp)
-    # Fallback: multi-strategy regex from step4 markdown
     if 'target_price' not in metrics:
-        s4 = _read_file('step4_quantitative_model.md')
+        tp = _extract_target_price(ws, mc, sa, _read_model_text)
+        if tp:
+            metrics['target_price'] = tp
 
-        target_keywords = ("目标价", "target price", "target_price", "p50 target", "p50目标价")
-        labeled_candidates = []
-        for line in s4.splitlines():
-            low = line.lower()
-            if "p50" not in low:
-                continue
-            if not any(kw in low for kw in target_keywords):
-                continue
-            nums = re.findall(r'(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])', line)
-            for num in nums:
-                try:
-                    if float(num) >= 1.0:
-                        labeled_candidates.append(num)
-                except ValueError:
-                    continue
-
-        # Strategy 2: Header summary "P50 目标价: 8.34"
-        header_tp = None
-        m = re.search(r'P50\s*目标价[：:]*\s*[~～]?([\d.]+)', s4)
-        if m and float(m.group(1)) >= 1.0:
-            header_tp = m.group(1)
-
-        if labeled_candidates:
-            metrics['target_price'] = labeled_candidates[-1]
-            metrics['forward_year'] = 'T+2'
-        elif header_tp:
-            metrics['target_price'] = header_tp
-        else:
-            m = re.search(
-                r'(?:P50\s*)?(?:目标价|target price)[：:\s|]*\*{0,2}([\d.]+)\*{0,2}',
-                s4,
-                re.IGNORECASE,
-            )
-            if m:
-                metrics['target_price'] = m.group(1)
-
-    # ── forward_pe ─────────────────────────────────────────────────────────
-    # Priority 1: pe_band_data.json (most accurate for "current forward PE")
-    if 'forward_pe' not in metrics and peb and isinstance(peb, dict) and 'current_forward_pe' in peb:
-        metrics['forward_pe'] = f"{peb['current_forward_pe']:.1f}x"
-    # Priority 2: calculated_valuation.json forward PE keys
-    if 'forward_pe' not in metrics and cv and isinstance(cv, dict):
-        for key in ('pe_forward', 'pe_forward_t2_ngaap', 'pe_forward_t1_ngaap',
-                    'pe_forward_t2', 'pe_forward_t1', 'pe_ttm_ngaap', 'pe_ttm'):
-            if key in cv and cv[key]:
-                v = cv[key]
-                if isinstance(v, dict):
-                    pe_value = v.get('pe', v.get('value'))
-                    if pe_value is not None:
-                        metrics['forward_pe'] = f"{pe_value:.1f}x" if isinstance(pe_value, (int, float)) else str(pe_value) + 'x'
-                elif isinstance(v, (int, float)):
-                    metrics['forward_pe'] = f"{v:.1f}x"
-                else:
-                    metrics['forward_pe'] = str(v) + 'x'
-                if 'forward_pe' in metrics:
-                    break
-    # Fallback: regex from step4 markdown
     if 'forward_pe' not in metrics:
-        s4 = _read_file('step4_quantitative_model.md')
-        for pattern in (
-            r'当前\s*Forward\s*PE[：:]*\s*([\d.]+)x',
-            r'P50\s*Forward\s*PE[^*]*?\*{0,2}([\d.]+)x',
-            r'Forward\s*PE\s*\|[^|]*?([\d.]+)x',
-            r'PE\(Forward[^)]*\)[^(]*?([\d.]+)x',
-            r'Forward PE[^(]*?([\d.]+)x',
-        ):
-            m = re.search(pattern, s4)
-            if m:
-                metrics['forward_pe'] = m.group(1) + 'x'
-                break
+        fpe = _extract_forward_pe(ws, peb, cv, _read_model_text)
+        if fpe:
+            metrics['forward_pe'] = fpe
 
-    # ── rrr ────────────────────────────────────────────────────────────────
-    # Priority 1: monte_carlo JSON
-    if 'rrr' not in metrics and mc and isinstance(mc, dict):
-        rrr_val = None
-        # Schema A: top-level rrr
-        if isinstance(mc.get('rrr'), (int, float)):
-            rrr_val = mc['rrr']
-        # Schema D: rrr.rrr
-        elif isinstance(mc.get('rrr'), dict):
-            rrr_val = mc['rrr'].get('rrr')
-        if rrr_val is not None:
-            metrics['rrr'] = f"{rrr_val:.2f}" if isinstance(rrr_val, float) else str(rrr_val)
-    # Fallback: regex from step5 markdown
     if 'rrr' not in metrics:
-        s5 = _read_file('step5_rrr_strategy.md')
-        for pattern in (
-            r'\*\*RRR[^*]*\*\*\s*\|?\s*\*{0,2}([\d.]+)\*{0,2}',
-            r'RRR\s*[=：:]\s*\*{0,2}([\d.]+)\*{0,2}',
-            r'RRR\s*\([^)]*\)\s*[=：:]?\s*([\d.]+)',
-            r'RRR.{0,30}?([\d]+\.[\d]+)',
-        ):
-            m = re.search(pattern, s5)
-            if m:
-                metrics['rrr'] = m.group(1)
-                break
+        rrr = _extract_rrr(mc, _read_file)
+        if rrr:
+            metrics['rrr'] = rrr
 
-    # ── moat (no JSON alternative — regex only) ────────────────────────────
-    s2 = _read_file('step2_competitive_moat.md')
-    m = re.search(r'(Wide|Narrow|None)\s*(?:Moat)?\s*,?\s*(Widening|Stable|Narrowing)', s2, re.IGNORECASE)
-    if m:
-        metrics['moat'] = f"{m.group(1)} {m.group(2)}"
-    elif re.search(r'Narrow', s2):
-        metrics['moat'] = 'Narrow'
+    moat = _extract_moat(ws, _read_file)
+    if moat:
+        metrics['moat'] = moat
 
-    # ── edge_score ─────────────────────────────────────────────────────────
-    # Priority 1: edge_score.json (handles both list and dict schemas)
-    ej = ws / 'edge_score.json'
-    if ej.exists():
-        try:
-            data = json.loads(ej.read_text(encoding='utf-8'))
-            if isinstance(data, list):
-                data = data[-1]
-            metrics['edge_score'] = str(data.get('composite', data.get('edge_score', '')))
-            metrics['edge_grade'] = data.get('composite_grade', data.get('grade', ''))
-        except Exception:
-            pass
-    # Priority 2: thesis.json (fallback)
-    if 'edge_score' not in metrics and thesis and isinstance(thesis, dict):
-        t = thesis
-        if 'history' in t and isinstance(t['history'], list) and t['history']:
-            latest = t['history'][-1]
-            if 'edge_score' in latest:
-                metrics['edge_score'] = str(latest['edge_score'])
-                metrics['edge_grade'] = latest.get('edge_grade', '')
-        elif 'edge_score' in t:
-            metrics['edge_score'] = str(t['edge_score'])
-            metrics['edge_grade'] = t.get('edge_grade', '')
+    es, eg = _extract_edge_score(ws, thesis)
+    if es:
+        metrics['edge_score'] = es
+    if eg:
+        metrics['edge_grade'] = eg
 
-    # ── decision (no JSON alternative — regex only) ────────────────────────
-    s7 = _read_file('step7_research_director_review.md')
-    m = re.search(r'\b(Buy|Hold|Pass)\b', s7)
-    if m:
-        metrics['decision'] = m.group(1)
+    decision = _extract_decision(ws, _read_file)
+    if decision:
+        metrics['decision'] = decision
 
-    # ── Sanity checks on extracted metrics ─────────────────────────────────
-    current_price = float(metrics.get('current_price', 0)) if metrics.get('current_price') else 0
-    target_price = float(metrics.get('target_price', 0)) if metrics.get('target_price') else 0
-    if current_price > 0 and target_price > 0:
-        ratio = target_price / current_price
-        if ratio < 0.1 or ratio > 5.0:
-            import warnings
-            warnings.warn(
-                f"Extracted target_price={target_price} vs current_price={current_price} "
-                f"(ratio={ratio:.2f}) looks unreasonable. Likely extraction error. "
-                f"Check step4_quantitative_model.md table formatting."
-            )
+    _sanity_check_metrics(metrics, ws, sa, _read_file)
 
     return metrics
 
@@ -558,12 +679,14 @@ def _extract_summary_metrics(workspace_dir, ticker: str) -> dict:
 
 # Mapping of known PNG filenames to step keys for targeted embedding
 _IMAGE_STEP_MAP = {
-    'monte_carlo_distribution.png': 'step4',
-    'monte_carlo_distribution_corrected.png': 'step4',
-    'monte_carlo_distribution_v3.png': 'step4',
-    'forward_pe_band.png': 'step4',
-    'eps_distribution.png': 'step4',
-    'eps_pe_scatter.png': 'step4',
+    'monte_carlo_distribution.png': 'step6',
+    'monte_carlo_distribution_corrected.png': 'step6',
+    'monte_carlo_distribution_v3.png': 'step6',
+    'forward_pe_band.png': 'step6',
+    'eps_distribution.png': 'step6',
+    'eps_pe_scatter.png': 'step6',
+    'revenue_driver_bridge.png': 'step4',
+    'target_price_distribution.png': 'step6',
 }
 
 
@@ -583,80 +706,54 @@ def _embed_image_as_base64(img_path: Path, alt_text: str = "") -> str:
 
 
 def _auto_embed_workspace_images(ws: Path, sections_html: str) -> str:
-    """Scan workspace for PNG files not already embedded, and inject them.
+    """Inject un-embedded workspace PNGs via ``<!-- AUTO_IMAGES:stepN -->`` markers.
 
-    1. Find all *.png in workspace (top-level only)
-    2. Check which are already embedded (filename stem or name in HTML)
-    3. For each un-embedded PNG: append to matched step or to appendix section
+    Uses deterministic marker replacement instead of fragile HTML-structure slicing.
+    Each marker is replaced with base64-encoded <img> blocks for PNGs mapped to
+    that step. Unmatched images are appended to an appendix section.
     """
-    png_files = sorted(ws.glob('*.png'))
+    png_files = sorted(ws.glob("*.png"))
     if not png_files:
         return sections_html
 
-    # Detect which PNGs are already embedded by checking if filename
-    # appears in the HTML (via alt text, chart-caption, or direct reference)
-    already_embedded = set()
-    for png in png_files:
-        if png.stem in sections_html or png.name in sections_html:
-            already_embedded.add(png.name)
+    # Detect already-embedded images by filename
+    already_embedded = {
+        png.name for png in png_files
+        if png.stem in sections_html or png.name in sections_html
+    }
 
     # Group un-embedded PNGs by target step
-    step_injections = {}   # step_key -> [(png_path, alt_text)]
-    appendix_images = []   # PNGs with no step mapping
+    step_images: dict[str, list[tuple[Path, str]]] = {}
+    appendix_images: list[Path] = []
 
     for png in png_files:
         if png.name in already_embedded:
             continue
         target_step = _IMAGE_STEP_MAP.get(png.name)
         if target_step:
-            step_injections.setdefault(target_step, []).append(
-                (png, png.stem.replace('_', ' ').title())
+            step_images.setdefault(target_step, []).append(
+                (png, png.stem.replace("_", " ").title())
             )
         else:
             appendix_images.append(png)
 
-    # Inject images into existing step sections
-    for step_key, images in step_injections.items():
-        injection_html = ''
+    # Replace each marker with the matching image HTML
+    for step_key, images in step_images.items():
+        injection = ""
         for img_path, alt_text in images:
             chunk = _embed_image_as_base64(img_path, alt_text)
             if chunk:
-                injection_html += chunk
-        if not injection_html:
+                injection += chunk
+        if not injection:
             continue
+        marker = f"<!-- AUTO_IMAGES:{step_key} -->"
+        sections_html = sections_html.replace(marker, injection + marker, 1)
 
-        marker = f'id="{step_key}"'
-        if marker not in sections_html:
-            # Can't find the step section — send to appendix instead
-            appendix_images.extend([ip for ip, _ in images])
-            continue
-
-        # Find the section-body closing div for this step
-        pos = sections_html.index(marker)
-        body_start = sections_html.find('<div class="section-body">', pos)
-        if body_start == -1:
-            appendix_images.extend([ip for ip, _ in images])
-            continue
-
-        next_section = sections_html.find('<div id="', pos + len(marker))
-        search_end = next_section if next_section != -1 else len(sections_html)
-        body_end = sections_html.rfind('</div></div>', body_start, search_end)
-        if body_end == -1:
-            appendix_images.extend([ip for ip, _ in images])
-            continue
-
-        # Insert before the closing </div>
-        sections_html = (
-            sections_html[:body_end]
-            + injection_html
-            + sections_html[body_end:]
-        )
-
-    # Build appendix section for unmatched images
+    # Build appendix for unmatched images
     if appendix_images:
-        appendix_body = ''
+        appendix_body = ""
         for img_path in appendix_images:
-            alt = img_path.stem.replace('_', ' ').title()
+            alt = img_path.stem.replace("_", " ").title()
             chunk = _embed_image_as_base64(img_path, alt)
             if chunk:
                 appendix_body += chunk
@@ -715,7 +812,7 @@ def generate_report_html(
             steps.append({**cfg, 'content': md})
         else:
             if not cfg.get('optional'):
-                print(f"Warning: {cfg['file']} not found, skipping")
+                logger.warning("%s not found, skipping", cfg['file'])
             steps.append({**cfg, 'content': ''})
 
     # --- Extract summary metrics ---
@@ -764,27 +861,29 @@ def generate_report_html(
         )
     model_html_body = ""
     model_link_html = ""
-    if (ws / "step4_structured_assumptions.json").exists():
+    forecast_model_html = ws / "forecast_model.html"
+    if forecast_model_html.exists():
         try:
-            from src.analysis.step4_validate import validate_step4
-            validation = validate_step4(ws / "step4_quantitative_model.md")
-            if not validation.get("passed"):
-                raise RuntimeError(
-                    "Step 4 validation failed; forecast model generation blocked. "
-                    "Run python -m src.cli validate-step4 WORKSPACE."
-                )
-            from src.analysis.financial_model import generate_financial_model_artifacts
-            model_artifacts = generate_financial_model_artifacts(ws, ticker=ticker)
-            model_html_body = model_artifacts.get("html_body", "")
-            model_path = Path(model_artifacts.get("html_path", ""))
-            if model_path:
-                model_link_html = (
-                    f'<p><strong>Standalone model:</strong> '
-                    f'{escape(model_path.name, quote=True)}</p>'
-                )
+            model_html_body = forecast_model_html.read_text(encoding="utf-8")
+            # Extract just the body content (between <body> and </body> or use as-is)
+            body_match = re.search(r"<body>(.*?)</body>", model_html_body, re.DOTALL)
+            if body_match:
+                # Extract content between <h1> and end of body, or use full match
+                inner = body_match.group(1)
+                h1_start = inner.find("<h1>")
+                if h1_start != -1:
+                    inner = inner[h1_start + len("<h1>"):]
+                    h1_end = inner.find("</h1>")
+                    if h1_end != -1:
+                        inner = inner[h1_end + len("</h1>"):]
+                model_html_body = inner.strip()
+            model_link_html = (
+                '<p><strong>Standalone model:</strong> '
+                f'{escape(forecast_model_html.name, quote=True)}</p>'
+            )
         except Exception as e:
             model_html_body = (
-                '<p><em>Forecast model not generated: '
+                '<p><em>Error reading forecast model: '
                 f'{escape(str(e), quote=True)}</em></p>'
             )
     if model_html_body:
@@ -816,8 +915,80 @@ def generate_report_html(
             f'<div class="section-header" onclick="toggleSection(this)">'
             f'<h2><i class="{step["icon"]}"></i> {step["title"]}</h2>'
             f'<span class="toggle"><i class="fas fa-chevron-down"></i></span></div>'
-            f'<div class="section-body">{body_html}</div></div>'
+            f'<div class="section-body">{body_html}'
+            f'<!-- AUTO_IMAGES:{step["key"]} --></div></div>'
         )
+
+    # --- Auto-generate Monte Carlo distribution chart from structured assumptions ---
+    sa_path = ws / "step4_structured_assumptions.json"
+    if sa_path.exists():
+        try:
+            sa = json.loads(sa_path.read_text(encoding='utf-8'))
+            _am_raw = sa.get("assumption_matrix", {})
+            _am = _am_raw if isinstance(_am_raw, dict) else {}
+            am = _am.get("T1_FY2026E", {})
+            fmi = sa.get("financial_model_inputs", {})
+
+            rg = am.get("revenue_growth", {})
+            npm = am.get("npm") or am.get("net_profit_margin") or {}
+            pe = am.get("pe_fwd_t1") or am.get("pe_multiple") or am.get("pe") or {}
+
+            # JSON keys may be strings ("10") or ints (10) — normalize
+            def _pct_get(d, pct):
+                if not isinstance(d, dict):
+                    return None
+                return d.get(f"p{pct}", d.get(str(pct), d.get(pct)))
+
+            def _ratio_value(d, pct):
+                value = _pct_get(d, pct)
+                if value is None:
+                    return None
+                value = float(value)
+                return value / 100.0 if abs(value) > 1.0 else value
+
+            def _number_value(d, pct):
+                value = _pct_get(d, pct)
+                return None if value is None else float(value)
+
+            required_pcts = [10, 30, 50, 70, 90]
+            has_all = all(
+                _ratio_value(rg, p) is not None
+                and _ratio_value(npm, p) is not None
+                and _number_value(pe, p) is not None
+                for p in required_pcts
+            )
+
+            if rg and npm and pe and has_all:
+                base_rev = sa.get("base_revenue_cny_m", 0)
+                shares = fmi.get("shares_outstanding", 1)
+                fx = fmi.get("hkd_cny", 1.0)
+
+                if base_rev and shares and fx and float(shares) > 0 and float(fx) > 0:
+                    price_pcts = {}
+                    for pct in required_pcts:
+                        rev = float(base_rev) * (1 + _ratio_value(rg, pct))
+                        ni = rev * _ratio_value(npm, pct)
+                        eps = ni * 1e4 / float(shares)  # rev in 万元 → CNY
+                        target = eps * _number_value(pe, pct) / float(fx)  # HKD
+                        price_pcts[pct] = target
+
+                    mc_png = ws / "monte_carlo_distribution.png"
+                    cur_price = sa.get("current_price_hkd")
+                    generate_distribution_from_percentiles(
+                        p10=price_pcts[10],
+                        p30=price_pcts[30],
+                        p50=price_pcts[50],
+                        p70=price_pcts[70],
+                        p90=price_pcts[90],
+                        title=f"{ticker} Monte Carlo Target Price Distribution (50K runs)",
+                        current_price=cur_price,
+                        save_path=mc_png,
+                        currency=currency,
+                    )
+                    if mc_png.exists():
+                        print(f"  ✓ Monte Carlo distribution chart generated: {mc_png}")
+        except Exception as e:
+            logger.warning("Monte Carlo chart generation skipped: %s", e)
 
     # --- Auto-embed workspace images not referenced in markdown ---
     sections_html = _auto_embed_workspace_images(ws, sections_html)

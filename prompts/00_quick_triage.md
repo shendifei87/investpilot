@@ -2,11 +2,31 @@
 
 ## 目标
 
-在投入完整七步深研之前，用 30-60 分钟判断这只股票是否值得进入 full research。Quick Triage 的任务不是证明 thesis，而是快速排除低赔率、无催化剂、无预期差或数据不足的标的。
+在投入完整 9 步深研之前，用 30-60 分钟判断这只股票是否值得进入 full research。Quick Triage 的任务不是证明 thesis，而是快速排除低赔率、无催化剂、无预期差或数据不足的标的。
 
 输出必须写入：
 
 `workspaces/{workspace_dir}/step0_quick_triage.md`
+
+## Workflow Guard
+
+Run before triage:
+
+```bash
+python -m src.cli workflow {workspace_dir} start --step 0
+```
+
+After writing `step0_quick_triage.md`:
+
+```bash
+python -m src.cli workflow {workspace_dir} complete --step 0 --artifact step0_quick_triage.md --summary "quick triage completed"
+```
+
+If the workspace is missing or there is not enough material for even a triage view:
+
+```bash
+python -m src.cli workflow {workspace_dir} block --step 0 --reason "insufficient materials for quick triage"
+```
 
 ## 输入
 
@@ -43,9 +63,9 @@ Quick Triage 只允许三种结论：
 
 | 结论 | 定义 | 后续动作 |
 |:--|:--|:--|
-| PASS | 没有清晰预期差、催化剂弱、估值不便宜，或存在重大不可验证风险 | 停止，不进入七步深研，除非用户明确 override |
+| PASS | 没有清晰预期差、催化剂弱、估值不便宜，或存在重大不可验证风险 | 停止，不进入 9 步深研，除非用户明确 override |
 | WATCH | 有潜在线索，但关键证据不足或催化剂窗口未到 | 不进入深研，列出触发重启研究的监控条件 |
-| FULL_RESEARCH | 存在可检验预期差、0-3 个月催化剂、初步赔率合理，且资料足够 | 继续 Step 1-7 |
+| FULL_RESEARCH | 存在可检验预期差、0-3 个月催化剂、初步赔率合理，且资料足够 | 继续 Step 1-9 |
 
 ## 输出模板
 
@@ -169,4 +189,38 @@ brief = tracker.generate_update_brief()
 # Returns: thesis summary, hypothesis status, catalyst decay, time since last update
 ```
 
-In incremental update mode, only update what changed (new data, new catalysts, hypothesis validation). Do not redo the full 7-step pipeline unless the thesis has been invalidated.
+In incremental update mode, only update what changed (new data, new catalysts, hypothesis validation). Do not redo the full 9-step pipeline unless the thesis has been invalidated.
+
+---
+
+## MCP 实时数据清单
+
+在撰写 Step 0 之前，按以下顺序调用 MCP 工具获取结构化数据，补充 CLI fetch 的批量数据。
+
+### 数据获取步骤
+
+```
+1. mcp__tushareMcp__daily_basic(ts_code="{ts_code}")
+   → 最新价格、PE/PB/PS、市值快照（注意：PE/PB 仅用于 sanity check，不作为估值结论）
+
+2. mcp__tushareMcp__forecast(ts_code="{ts_code}")
+   → 业绩预告数据（预告类型、净利润范围）
+
+3. mcp__tushareMcp__express(ts_code="{ts_code}")
+   → 最新业绩快报（营收、净利润、EPS）
+
+4. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{10天前}", end_date="{今天}")
+   → 近 10 天资金流向（大单/中单/小单净额）
+
+5. 卖方评级与目标价：
+   → WebSearch 搜索 "{ticker} 券商评级 目标价" 或 "{ticker} analyst ratings target price"
+
+6. deep-research skill（可选，用于复杂触发事件）：
+   → Skill("deep-research", args="{ticker} 最新事件及其对基本面的影响")
+```
+
+### 注意事项
+
+1. `daily_basic` 返回的 PE/PB 仅供粗筛参考，不得作为估值结论引用
+2. 所有估值结论必须通过 `calc_pe`/`calc_pb` 自算，标注 `source: calculated`
+3. 不确定能否在 2000 积分下使用的 API 已排除，改用 WebSearch

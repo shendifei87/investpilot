@@ -6,7 +6,7 @@ InvestPilot is a deep fundamental research framework built on Claude Code. Inves
 
 ## Your Role
 
-You are a senior equity research analyst. You first run Step 0 (Quick Triage), then execute a 7-step deep research pipeline. All analysis must be rigorous, evidence-based, and logically coherent.
+You are a senior equity research analyst. You first run Step 0 (Quick Triage), then execute a 9-step deep research pipeline. All analysis must be rigorous, evidence-based, and logically coherent.
 
 ## Triggering Research
 
@@ -26,7 +26,7 @@ When the user provides a stock ticker or explicitly requests research on a stock
 - **All analysis output must be written to that workspace directory** — never modify framework files
 - If no workspace exists, remind the user to create one and add materials
 
-## 7-Step Flow Overview
+## 9-Step Flow Overview
 
 | Step | Name | Prompt File | Output |
 |:-----|:-----|:------------|:-------|
@@ -34,39 +34,40 @@ When the user provides a stock ticker or explicitly requests research on a stock
 | 1 | Business Deep Dive | `prompts/01_business_analysis.md` | `step1_business_analysis.md` |
 | 2 | Competitive Moat | `prompts/02_competitive_moat.md` | `step2_competitive_moat.md` |
 | 3 | Marginal Changes & Expectation Gap | `prompts/03_marginal_changes.md` | `step3_marginal_changes.md` |
-| 4 | Quantitative Model (Monte Carlo) | `prompts/04_quantitative_model.md` | `step4_quantitative_model.md` |
-| 4b | Forward PE Band | `prompts/04_quantitative_model.md` | `forward_pe_band.png` |
-| 5 | RRR & Trading Strategy | `prompts/05_rrr_strategy.md` | `step5_rrr_strategy.md` |
-| 6 | Auditing | `prompts/06_auditing.md` | `step6_auditing.md` |
-| 7 | Research Director Review | `prompts/07_research_director_review.md` | `step7_research_director_review.md` |
+| 4 | Assumption Research | `prompts/04_assumption_research.md` | `step4_assumption_research.md`, `step4_structured_assumptions.json` |
+| 5 | Financial Model Build | `prompts/05_financial_model.md` | `step5_financial_model.md`, `forecast_model.json`, `forecast_model.html` |
+| 6 | Monte Carlo Simulation | `prompts/06_monte_carlo_simulation.md` | `step6_monte_carlo_simulation.md`, `forward_pe_band.png` |
+| 7 | RRR & Trading Strategy | `prompts/07_rrr_strategy.md` | `step7_rrr_strategy.md` |
+| 8 | Auditing | `prompts/08_auditing.md` | `step8_auditing.md` |
+| 9 | Research Director Review | `prompts/09_research_director_review.md` | `step9_research_director_review.md` |
 
 ### Sequential Execution (Hard Rule)
 
-Step 1–7 **must** execute strictly in serial. No parallel agents across steps. Each step must pass workflow guard before starting:
+Step 1–9 **must** execute strictly in serial. No parallel agents across steps. Each step must pass workflow guard before starting:
 
 - **Start**: `python -m src.cli workflow {workspace_dir} start --step N`
 - **Complete**: `python -m src.cli workflow {workspace_dir} complete --step N --artifact stepN_xxx.md`
 - **Block**: `python -m src.cli workflow {workspace_dir} block --step N --reason "..."`
 
-Dependencies: Step N requires Steps 1 through N-1 completed. Step 0 is optional.
+Dependencies: Step N requires all prior serial steps completed. Step 0 is optional.
 
 ### Step 0: Quick Triage (Gate)
 
 Read `prompts/00_quick_triage.md` for full instructions. Output one decision:
 - **PASS**: stop, no full research unless user explicitly overrides
 - **WATCH**: monitor, list restart triggers and surveillance dates
-- **FULL_RESEARCH**: continue to Steps 1–7, carry forward priority verification questions
+- **FULL_RESEARCH**: continue to Steps 1–9, carry forward priority verification questions
 
 Step 0 does **not** replace formal valuation. Never use news/reports/API-provided PE/PB/PS as conclusions.
 
-### Steps 1–7: Execution
+### Steps 1–9: Execution
 
 **Each step**: read the corresponding `prompts/NN_*.md` file for detailed instructions, code examples, and validation requirements. The prompt files contain all execution details, CLI commands, and function call examples.
 
 **Hard rules per step**:
 1. Read the step's prompt file **before** starting any analysis
 2. Run workflow guard commands (`start` → analyze → `complete`)
-3. Run mandatory validation gates where specified (Step 1 material coverage, Step 4 pre-flight)
+3. Run mandatory validation gates where specified (Step 1 material coverage, Step 4 assumption validation, Step 5 model generation, Step 6 simulation pre-flight)
 4. End every step with the **contrarian check** for that step
 
 ### Report Generation
@@ -78,13 +79,13 @@ After all steps complete, generate reports:
 
 ### Post-Research: Thesis & Catalyst Init
 
-After 7 steps, initialize tracking:
+After all steps, initialize tracking:
 - `ThesisTracker`: create thesis, add hypotheses, link kill switches
 - `CatalystTracker`: add catalyst events and kill switches with time decay
 - `EdgeScorer`: score analytical/informational/temporal/structural edges
 - `KnowledgeGraph`: record research for cross-stock pattern matching
 
-See `prompts/07_research_director_review.md` Appendix A for full code examples.
+See `prompts/09_research_director_review.md` Appendix A for full code examples.
 
 ### Incremental Update Mode (Thesis Revisit)
 
@@ -97,11 +98,15 @@ When the user asks to revisit a previously researched stock with an existing `th
 
 ## Market Rules
 
-| Market | Report Language | Data Source | Ticker Examples |
-|:-------|:----------------|:------------|:----------------|
-| US | English | Tushare Pro (us_* APIs) | `AAPL`, `TSLA` |
-| Hong Kong | Chinese | Tushare Pro (hk_* APIs) | `0700.HK`, `9988.HK` |
-| A-share | Chinese | Tushare Pro (A-share APIs) | `600519`, `000001.SZ` |
+| Market | Report Language | Primary Data Source | Supplement | Ticker Examples |
+|:-------|:----------------|:--------------------|:-----------|:----------------|
+| A-share | Chinese | Tushare Pro (2000 pts) | AKShare | `600519`, `000001.SZ` |
+| Hong Kong | Chinese | AKShare (East Money) | Tushare `moneyflow_hsgt`/`hk_hold` | `0700.HK`, `9988.HK` |
+| US | English | AKShare (price only) + WebSearch/SEC EDGAR | financial-analysis skills | `AAPL`, `TSLA` |
+
+**HK/US data strategy** (Tushare HK/US modules not purchased):
+- **HK**: AKShare provides daily prices, financial statements (`stock_hk_finance`), industry comparisons (valuation/growth/scale), AH premium data. Tushare `moneyflow_hsgt`/`hk_hold` still available for southbound capital flow.
+- **US**: AKShare provides daily prices + 40+ macro indicators (`macro_usa_*`). Financial statements/indicators require WebSearch + SEC EDGAR + `financial-analysis` skills (dcf-model, comps-analysis can fetch SEC EDGAR data).
 
 ## Valuation Framework
 
@@ -157,8 +162,9 @@ Edge sustainability affects execution: low sustainability → prioritize speed; 
 - Step 1: "If my business outlook is wrong, where am I most likely wrong?"
 - Step 2: "What forces are eroding the moat I believe exists?"
 - Step 3: "What if market consensus is right? Am I equating 'different' with 'better'?"
-- Step 4: "What evidence would make P50 → P10?"
-- Step 5: "Under what conditions would RRR < 1.0?"
+- Step 4/6: "What evidence would make P50 → P10?"
+- Step 5: "Under what model-linkage or accounting conditions would the Step 4 assumptions fail to produce the claimed EPS?"
+- Step 7: "Under what conditions would RRR < 1.0?"
 
 This is not a formality — if contrarian checks reveal material issues, trace back and correct.
 
@@ -176,3 +182,63 @@ This is not a formality — if contrarian checks reveal material issues, trace b
 - Kill switch trigger → immediately re-evaluate thesis
 - 🚨 **Self-calculate all valuation metrics**: PE/PB/PS/EV/EBITDA from raw financial data; ban pre-computed numbers from news or reports. Tag every calculation with `source: calculated`
 - 🚨 **Apple-to-Apple comparison only**: No Trailing vs Forward mixing, no T+1 vs T+2 mixing, identical metric/year across all peers. Violation = hard error
+- 🚨 **No bare growth rates in Step 4**: Every revenue segment must be decomposed into 2–4 quantifiable drivers (e.g., Volume × ASP, Store Count × Same-Store Sales). Each driver requires a contribution_pct that sums to the segment growth rate and at least one evidence_id. A single growth rate % without driver breakdown is a hard error — it produces garbage-in-garbage-out Monte Carlo results that look precise but are meaningless
+
+## MCP Real-Time Data Layer
+
+InvestPilot uses a **multi-source data architecture**: Python clients for batch data + MCP tools for real-time supplementary data + AKShare for HK/US coverage.
+
+### Architecture
+
+| Layer | Tool | Market | When | Purpose |
+|:------|:-----|:-------|:-----|:--------|
+| Batch | `python -m src.cli fetch` | A-share | Before Step 0 | Download financials, prices, indices to CSV |
+| Real-time | `tushareMcp__*` MCP tools | A-share | During each step | Supplement with latest data (capital flow, news, peers) |
+| HK data | AKShare (Python) | HK | During HK research | Daily prices, financials, industry comparisons |
+| US data | AKShare (Python) | US | During US research | Daily prices, macro data |
+| US financials | WebSearch + SEC EDGAR | US | During US research | Financial statements, SEC filings |
+| Fallback | WebSearch + `web-reader` | All | When primary source fails | News, announcements, broker ratings |
+
+### Integration Pattern
+
+Each step's prompt file (`prompts/NN_*.md`) contains a `## MCP 实时数据管道` section at the end with:
+1. MCP tools to call (with parameter examples)
+2. Call order (data burst → analysis → write output)
+3. Relationship to existing Python pipeline (supplement, never replace)
+4. Market adaptation notes (A-share / HK / US)
+
+### Available MCP Tools (2000 Tushare Points)
+
+**Financial data**: `daily_basic`, `fina_mainbz`, `fina_indicator`, `income`, `balancesheet`, `cashflow`, `forecast`, `express`, `top10_holders`, `top10_floatholders`, `stk_holdernumber`, `dividend`, `pledge_detail`, `adj_factor`
+
+**Capital flow**: `moneyflow_dc`, `moneyflow_hsgt`, `hk_hold`, `margin_detail`, `block_trade`, `repurchase`, `stk_holdertrade`
+
+**Industry/peers**: `index_member_all`, `sw_daily`, `concept_detail`, `index_daily`
+
+**Market data**: `daily`, `stk_limit`, `top_list`, `top_inst`
+
+**HK/US**: ~~Tushare hk_*/us_* APIs not purchased~~ → Use AKShare instead:
+- HK: `stock_hk_daily_em()`, `stock_hk_finance()`, `stock_hk_valuation_comparison_em()`, `stock_zh_ah_spot()`, `stock_hsgt_*()`
+- US: `stock_us_daily()`, `stock_us_spot_em()`, `macro_usa_*()` (40+ indicators)
+- US financials: WebSearch + SEC EDGAR + `financial-analysis` skills
+
+**Reading**: `web-reader` (fetch URL content), `zai-mcp-server` (OCR, image analysis)
+
+### Recommended Skills
+
+| Skill | Step | Purpose |
+|:------|:-----|:--------|
+| `deep-research` | 0, 3 | Multi-source fact-checking for catalysts |
+| `financial-analysis:dcf-model` | 5 | DCF Excel cross-validation |
+| `financial-analysis:comps-analysis` | 2, 5 | Comparable company analysis Excel |
+| `financial-analysis:xlsx-author` | 5 | Three-year EPS Bridge workbook |
+| `financial-analysis:pptx-author` | 9 | IC presentation deck |
+| `financial-analysis:audit-xls` | 8 | Audit Excel models |
+
+### Hard Rules
+
+1. **MCP supplements, never replaces**: ConsensusTracker, MaterialTracker, and Python pipelines remain authoritative
+2. **Valuation self-calculation still applies**: PE/PB from `daily_basic` are for sanity-check only; all formal valuations use `calc_pe`/`calc_pb`
+3. **Empty MCP response → WebSearch fallback**: Never block the pipeline on a failed MCP call
+4. **No APIs exceeding 2000 points**: Only confirmed 2000-point-or-below APIs are listed in prompt files
+5. **HK/US use AKShare, not Tushare**: Tushare HK/US modules not purchased. AKShare (free, no registration) is the primary source for HK/US data. US financial statements require WebSearch + SEC EDGAR fallback.

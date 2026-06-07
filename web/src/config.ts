@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import crypto from "node:crypto";
+import fs from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -32,35 +33,64 @@ export function _testOverride(overrides: {
 }
 
 // ---------------------------------------------------------------------------
-// Step definitions (mirrors Python app.py)
+// Step definitions (single source: config/step_contracts.json)
 // ---------------------------------------------------------------------------
 
-export const STEP_FILES: Record<number, string> = {
-  0: "step0_quick_triage.md",
-  1: "step1_business_analysis.md",
-  2: "step2_competitive_moat.md",
-  3: "step3_marginal_changes.md",
-  4: "step4_quantitative_model.md",
-  5: "step5_rrr_strategy.md",
-  6: "step6_auditing.md",
-  7: "step7_research_director_review.md",
-};
+interface StepContract {
+  id: string;
+  name: string;
+  primary_artifact: string;
+}
 
-export const STEP_NAMES: Record<number, string> = {
-  0: "Quick Triage",
-  1: "Business Deep Dive",
-  2: "Competitive Moat",
-  3: "Marginal Changes & Expectation Gap",
-  4: "Quantitative Model & Simulation",
-  5: "RRR & Trading Strategy",
-  6: "Auditing & Quality Control",
-  7: "Research Director Review",
-};
+interface StepContractsConfig {
+  core_steps: string[];
+  steps: StepContract[];
+}
 
-export const CORE_STEP_NUMBERS = [1, 2, 3, 4, 5, 6, 7] as const;
-export const DISPLAY_STEP_NUMBERS = Object.keys(STEP_FILES)
-  .map(Number)
-  .sort((a, b) => a - b);
+function loadStepContracts(): StepContractsConfig {
+  const STEP_CONTRACTS_PATH = path.join(PROJECT_ROOT, "config", "step_contracts.json");
+  try {
+    if (!fs.existsSync(STEP_CONTRACTS_PATH)) {
+      throw new Error(
+        `step_contracts.json not found at ${STEP_CONTRACTS_PATH}. ` +
+        "Ensure the config/ directory is present in the project root.",
+      );
+    }
+    const raw = fs.readFileSync(STEP_CONTRACTS_PATH, "utf-8");
+    const data = JSON.parse(raw) as StepContractsConfig;
+    if (!Array.isArray(data.steps)) {
+      throw new Error("step_contracts.json must contain a 'steps' array");
+    }
+    return data;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(
+        `Failed to parse step_contracts.json: ${err.message}. ` +
+        "Check for JSON syntax errors.",
+      );
+    }
+    throw err;
+  }
+}
+
+const STEP_CONTRACTS_DATA = loadStepContracts();
+
+export type StepId = string;
+export const STEP_ORDER = STEP_CONTRACTS_DATA.steps.map((step) => step.id);
+export const STEP_FILES: Record<StepId, string> = Object.fromEntries(
+  STEP_CONTRACTS_DATA.steps.map((step) => [step.id, step.primary_artifact]),
+);
+export const STEP_NAMES: Record<StepId, string> = Object.fromEntries(
+  STEP_CONTRACTS_DATA.steps.map((step) => [step.id, step.name]),
+);
+
+export const CORE_STEP_IDS = STEP_CONTRACTS_DATA.core_steps;
+export const DISPLAY_STEP_IDS = STEP_ORDER;
+
+export function normalizeStepId(raw: string): StepId | null {
+  const key = raw.trim().toLowerCase();
+  return (STEP_ORDER as readonly string[]).includes(key) ? (key as StepId) : null;
+}
 
 // ---------------------------------------------------------------------------
 // Security configuration

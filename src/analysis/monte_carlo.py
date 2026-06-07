@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.stats import t as t_dist
+from scipy.stats import norm, t as t_dist
 from config.settings import MONTE_CARLO_SIMULATIONS, WORKSPACES_DIR
 from src.analysis._base import resolve_workspace_path
 from src.storage import AtomicJSON
@@ -135,15 +135,8 @@ def _ndtri(p):
 
 
 def _norm_cdf(x):
-    """Standard normal CDF (Abramowitz & Stegun 26.2.17, pure numpy)."""
-    x = np.asarray(x, dtype=float)
-    a = np.array([0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429])
-    p = 0.3275911
-    sign = np.sign(x)
-    x_abs = np.abs(x) / np.sqrt(2)
-    t = 1.0 / (1.0 + p * x_abs)
-    y = 1.0 - (((((a[4]*t + a[3])*t + a[2])*t + a[1])*t + a[0]) * t * np.exp(-x_abs * x_abs))
-    return 0.5 * (1.0 + sign * y)
+    """Standard normal CDF via scipy.stats.norm (accurate across full domain)."""
+    return norm.cdf(x)
 
 
 def _t_cdf(x, df):

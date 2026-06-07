@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "core_steps": ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+  "steps": [
+    {
+      "id": "0",
+      "name": "Quick Triage",
+      "report_title": "Step 0: 快速筛选",
+      "report_icon": "fas fa-filter",
+      "prompt_file": "prompts/00_quick_triage.md",
+      "primary_artifact": "step0_quick_triage.md",
+      "required_artifacts": ["step0_quick_triage.md"],
+      "optional_artifacts": [],
+      "dependencies": [],
+      "optional": true,
+      "phase": "triage",
+      "validation_gates": [],
+      "contract_focus": "Decide PASS / WATCH / FULL_RESEARCH before deep research."
+    },
+    {
+      "id": "1",
+      "name": "Business Deep Dive",
+      "report_title": "Step 1: 业务面深入研究",
+      "report_icon": "fas fa-building",
+      "prompt_file": "prompts/01_business_analysis.md",
+      "primary_artifact": "step1_business_analysis.md",
+      "required_artifacts": ["step1_business_analysis.md"],
+      "optional_artifacts": ["material_extracts.json"],
+      "dependencies": [],
+      "optional": false,
+      "phase": "evidence_and_business",
+      "validation_gates": ["material_coverage", "annual_mda_coverage"],
+      "contract_focus": "Build evidence-grounded business understanding with mandatory MD&A coverage."
+    },
+    {
+      "id": "2",
+      "name": "Competitive Moat",
+      "report_title": "Step 2: 竞争壁垒与护城河",
+      "report_icon": "fas fa-shield-halved",
+      "prompt_file": "prompts/02_competitive_moat.md",
+      "primary_artifact": "step2_competitive_moat.md",
+      "required_artifacts": ["step2_competitive_moat.md"],
+      "optional_artifacts": [],
+      "dependencies": ["1"],
+      "optional": false,
+      "phase": "business_quality",
+      "validation_gates": ["contrarian_check"],
+      "contract_focus": "Assess moat type, durability, erosion forces, and peer context."
+    },
+    {
+      "id": "3",
+      "name": "Marginal Changes & Expectation Gap",
+      "report_title": "Step 3: 边际变化与预期差",
+      "report_icon": "fas fa-arrows-spin",
+      "prompt_file": "prompts/03_marginal_changes.md",
+      "primary_artifact": "step3_marginal_changes.md",
+      "required_artifacts": ["step3_marginal_changes.md"],
+      "optional_artifacts": ["consensus_snapshot.json", "edge_score.json"],
+      "dependencies": ["1", "2"],
+      "optional": false,
+      "phase": "edge_and_catalyst",
+      "validation_gates": ["consensus_snapshot", "edge_scoring", "contrarian_check"],
+      "contract_focus": "Identify expectation gaps likely to be resolved within 0-3 months."
+    },
+    {
+      "id": "4",
+      "name": "Assumption Research",
+      "report_title": "Step 4: 假设研究",
+      "report_icon": "fas fa-magnifying-glass-chart",
+      "prompt_file": "prompts/04_assumption_research.md",
+      "primary_artifact": "step4_assumption_research.md",
+      "required_artifacts": [
+        "step4_assumption_research.md",
+        "step4_structured_assumptions.json",
+        "_reviewed_assumptions.json"
+      ],
+      "optional_artifacts": ["step4_blockers.md"],
+      "dependencies": ["1", "2", "3"],
+      "optional": false,
+      "phase": "assumption_lab",
+      "validation_gates": [
+        "structured_assumptions",
+        "driver_decomposition",
+        "reviewed_assumption_lock",
+        "self_calculated_valuation",
+        "apple_to_apple_valuation"
+      ],
+      "contract_focus": "Convert evidence into a locked probabilistic driver-level assumption matrix."
+    },
+    {
+      "id": "5",
+      "name": "Financial Model Build",
+      "report_title": "Step 5: 财务模型",
+      "report_icon": "fas fa-table",
+      "prompt_file": "prompts/05_financial_model.md",
+      "primary_artifact": "step5_financial_model.md",
+      "required_artifacts": [
+        "step5_financial_model.md",
+        "forecast_model.json",
+        "forecast_model.html"
+      ],
+      "optional_artifacts": [],
+      "dependencies": ["1", "2", "3", "4"],
+      "optional": false,
+      "phase": "financial_model",
+      "validation_gates": ["step4_validation", "formula_linkage", "assumption_lock"],
+      "contract_focus": "Generate a formula-linked three-year forecast model from locked Step 4 assumptions."
+    },
+    {
+      "id": "6",
+      "name": "Monte Carlo Simulation",
+      "report_title": "Step 6: 蒙特卡洛模拟",
+      "report_icon": "fas fa-chart-line",
+      "prompt_file": "prompts/06_monte_carlo_simulation.md",
+      "primary_artifact": "step6_monte_carlo_simulation.md",
+      "required_artifacts": [
+        "step6_monte_carlo_simulation.md",
+        "monte_carlo_results.json"
+      ],
+      "optional_artifacts": [
+        "forward_pe_band.png",
+        "monte_carlo_distribution.png",
+        "eps_distribution.png",
+        "eps_pe_scatter.png"
+      ],
+      "dependencies": ["1", "2", "3", "4", "5"],
+      "optional": false,
+      "phase": "simulation",
+      "validation_gates": ["reviewed_assumption_lock", "forecast_model_linkage", "simulation_reproducibility"],
+      "contract_focus": "Simulate the locked assumption matrix through the Step 5 model without post-review changes."
+    },
+    {
+      "id": "7",
+      "name": "RRR & Trading Strategy",
+      "report_title": "Step 7: RRR 估算与交易策略",
+      "report_icon": "fas fa-scale-balanced",
+      "prompt_file": "prompts/07_rrr_strategy.md",
+      "primary_artifact": "step7_rrr_strategy.md",
+      "required_artifacts": ["step7_rrr_strategy.md"],
+      "optional_artifacts": [],
+      "dependencies": ["1", "2", "3", "4", "5", "6"],
+      "optional": false,
+      "phase": "decision_math",
+      "validation_gates": ["rrr_recalculation", "kelly_sizing", "contrarian_check"],
+      "contract_focus": "Translate the valuation distribution into RRR, Kelly sizing, entry logic, and kill switches."
+    },
+    {
+      "id": "8",
+      "name": "Auditing & Quality Control",
+      "report_title": "Step 8: 审计",
+      "report_icon": "fas fa-clipboard-check",
+      "prompt_file": "prompts/08_auditing.md",
+      "primary_artifact": "step8_auditing.md",
+      "required_artifacts": ["step8_auditing.md"],
+      "optional_artifacts": [],
+      "dependencies": ["1", "2", "3", "4", "5", "6", "7"],
+      "optional": false,
+      "phase": "audit",
+      "validation_gates": ["fact_traceability", "valuation_traceability", "contrarian_coverage"],
+      "contract_focus": "Audit facts, model linkage, valuation traceability, and contrarian coverage through Step 8."
+    },
+    {
+      "id": "9",
+      "name": "Research Director Review",
+      "report_title": "Step 9: 研究总监审核",
+      "report_icon": "fas fa-user-tie",
+      "prompt_file": "prompts/09_research_director_review.md",
+      "primary_artifact": "step9_research_director_review.md",
+      "required_artifacts": ["step9_research_director_review.md"],
+      "optional_artifacts": ["thesis.json", "catalysts.json", "calibration_record.json"],
+      "dependencies": ["1", "2", "3", "4", "5", "6", "7", "8"],
+      "optional": false,
+      "phase": "director_review",
+      "validation_gates": ["director_override", "ic_recommendation", "post_research_initialization"],
+      "contract_focus": "Render a final real-money investment decision with override logic and tracking initialization."
+    }
+  ],
+  "forbidden_artifacts": [
+    "step4_quantitative_model.md",
+    "step4a_assumption_research.md",
+    "step4b_financial_model.md",
+    "step4c_monte_carlo_simulation.md",
+    "step5_rrr_strategy.md",
+    "step6_auditing.md",
+    "step7_research_director_review.md"
+  ]
+}

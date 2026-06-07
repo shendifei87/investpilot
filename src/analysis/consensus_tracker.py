@@ -16,6 +16,7 @@ from typing import Any
 import uuid
 
 from src.analysis._base import WorkspaceStateBase
+from src.analysis._utils import coerce_float as _coerce_number
 
 
 def _today() -> str:
@@ -26,22 +27,7 @@ def _id(prefix: str) -> str:
     return f"{prefix}{uuid.uuid4().hex[:6]}"
 
 
-def _coerce_number(value: Any) -> float | None:
-    """Best-effort numeric coercion for values like '12.5%', '18x', '1,234'."""
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip().replace(",", "")
-        is_pct = text.endswith("%")
-        text = text.rstrip("%xX")
-        try:
-            num = float(text)
-        except ValueError:
-            return None
-        return num / 100 if is_pct else num
-    return None
+# _coerce_number is imported from src.analysis._utils
 
 
 def _normalize_metric_entry(metric: str, period: str, raw: Any) -> dict:

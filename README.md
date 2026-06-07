@@ -4,7 +4,7 @@ A deep fundamental investment research harness built on Claude Code. Seeks signi
 
 ## Features
 
-- **Quick Triage Gate + 7-Step Deep Research Pipeline** — PASS / WATCH / FULL_RESEARCH screening before full research
+- **Quick Triage Gate + 9-Step Deep Research Pipeline** — PASS / WATCH / FULL_RESEARCH screening before full research
 - **Sequential Workflow Guard** — State machine enforces step-by-step progression with dependency checks, blocking, and artifact tracking
 - **Formula-Linked Financial Forecast Model** — Three-statement model (income, cash flow, balance sheet) with segment-level revenue build, valuation bridge, and built-in consistency checks
 - **Step 4 Structured Assumptions + Validation** — Pre-flight 15-check validator with guard state, retry limits, and blocker escalation before Monte Carlo simulation
@@ -65,7 +65,7 @@ python -m src.cli fetch AAPL -o workspaces/AAPL
 
 ### 3. Launch Research
 
-Enter a stock ticker in Claude Code to trigger Quick Triage before the 7-step analysis pipeline:
+Enter a stock ticker in Claude Code to trigger Quick Triage before the 9-step analysis pipeline:
 
 ```
 > Research AAPL
@@ -75,9 +75,11 @@ Quick Triage writes `workspaces/AAPL/step0_quick_triage.md` and returns one of:
 
 - `PASS`: stop unless explicitly overridden
 - `WATCH`: monitor defined triggers before full research
-- `FULL_RESEARCH`: continue Business Analysis → Competitive Moat → Marginal Changes → Quantitative Modeling → Trading Strategy → Auditing → Research Director Review
+- `FULL_RESEARCH`: continue Business Analysis → Competitive Moat → Marginal Changes → Assumption Research → Financial Model Build → Monte Carlo Simulation → RRR & Trading Strategy → Auditing → Research Director Review
 
 See [CLAUDE.md](CLAUDE.md) for the full workflow details.
+
+For the contract-driven rewrite roadmap, see [docs/architecture_rewrite_plan.md](docs/architecture_rewrite_plan.md).
 
 ### 4. Start the Web Dashboard
 
@@ -101,8 +103,8 @@ npm start -- 3000
 | `fetch <ticker>` | Fetch data into workspace |
 | `fetch-peers <ticker>` | Fetch peer company data |
 | `analyze <ticker>` | Technical analysis (MA / RSI / MACD) |
-| `workflow <workspace> <action>` | Manage sequential research workflow state (start / complete / block / status) |
-| `validate-step4 <workspace>` | Run Step 4 pre-flight validation with guard state |
+| `workflow <workspace> <action>` | Manage sequential research workflow state for steps 0–9 |
+| `validate-step4 <workspace>` | Run Step 4 assumption validation with guard state |
 | `validate-materials <workspace>` | Verify material coverage (annual report + MD&A extraction) |
 | `model <workspace>` | Generate formula-linked financial forecast model (JSON + HTML) |
 | `thesis <action>` | Manage investment thesis lifecycle |
@@ -116,9 +118,9 @@ npm start -- 3000
 
 ```
 investpilot/
-├── CLAUDE.md              # Master prompt (7-step workflow definition)
+├── CLAUDE.md              # Master prompt (9-step workflow definition)
 ├── config/                # Configuration (market rules, thresholds, weights)
-├── prompts/               # 7-step prompt templates
+├── prompts/               # 9-step prompt templates (00–09)
 ├── web/                   # TypeScript web layer (Hono)
 │   ├── src/
 │   │   ├── index.ts       # Entry point — Hono app + @hono/node-server
@@ -128,7 +130,7 @@ investpilot/
 │   │   └── services/     # Workspace status, multipart parsing
 │   ├── public/
 │   │   └── index.html     # Dashboard SPA
-│   ├── tests/             # Vitest test suite (44 tests)
+│   ├── tests/             # Vitest test suite
 │   └── package.json
 ├── src/
 │   ├── cli.py             # CLI entry point
@@ -137,7 +139,7 @@ investpilot/
 │   │   ├── financial.py   # Financial analysis (PE/PB/PS/EV, earnings quality)
 │   │   ├── monte_carlo.py # Probabilistic simulation + Kelly criterion
 │   │   ├── valuation.py   # DCF / Reverse DCF / Forward PE Band
-│   │   ├── step4_validate.py  # Step 4 pre-flight validator (15 checks)
+│   │   ├── step4_validate.py  # Step 4 assumption validator and guard
 │   │   ├── step4_schema.py    # Step 4 structured assumption schema + persistence
 │   │   ├── financial_model.py # Formula-linked three-statement forecast model
 │   │   ├── research_workflow.py # Sequential workflow state machine
@@ -153,7 +155,7 @@ investpilot/
 │   │   ├── us_fetcher.py      # US (Tushare)
 │   │   └── tushare_client.py  # Unified Tushare API client
 │   └── report/            # Report generation (HTML + Markdown)
-├── tests/                 # Python test suite (44 tests)
+├── tests/                 # Python test suite
 └── workspaces/            # Per-stock research data and outputs
 ```
 

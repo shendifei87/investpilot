@@ -33,7 +33,11 @@ MARKET_CONFIG = {
 
 # ── Environment helpers ──────────────────────────────────────────
 def _read_dotenv_value(key: str) -> str:
-    """Read KEY from a simple project-level .env file without extra deps."""
+    """Read KEY from a simple project-level .env file without extra deps.
+
+    Handles values containing ``=`` (e.g. TOKEN=abc=def) by splitting only
+    on the first ``=`` and stripping surrounding quotes.
+    """
     env_path = PROJECT_ROOT / ".env"
     if not env_path.exists():
         return ""
@@ -45,7 +49,10 @@ def _read_dotenv_value(key: str) -> str:
             k, v = line.split("=", 1)
             if k.strip() != key:
                 continue
-            return v.strip().strip('"').strip("'")
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            return v
     except OSError:
         return ""
     return ""

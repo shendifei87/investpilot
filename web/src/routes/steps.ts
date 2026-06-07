@@ -1,22 +1,22 @@
 import { Hono } from "hono";
 import fs from "node:fs";
 import path from "node:path";
-import { STEP_FILES } from "../config.js";
+import { normalizeStepId, STEP_FILES } from "../config.js";
 import { workspacePath } from "../services/workspace.js";
 
 const steps = new Hono();
 
 /**
  * GET /api/research/:ticker/step/:n
- * Return markdown content for a specific step (0-7).
+ * Return markdown content for a specific step (0-9).
  */
 steps.get("/api/research/:ticker/step/:n", (c) => {
   const tickerParam = c.req.param("ticker");
   const stepParam = c.req.param("n");
-  const step = parseInt(stepParam, 10);
+  const step = normalizeStepId(stepParam);
 
   const resolved = workspacePath(tickerParam);
-  if (!resolved) {
+  if (!resolved || step === null) {
     return c.json({ error: "Step not found" }, 404);
   }
 
@@ -32,7 +32,8 @@ steps.get("/api/research/:ticker/step/:n", (c) => {
   }
 
   const content = fs.readFileSync(stepFile, "utf-8");
-  return c.json({ ticker, step, content });
+  const responseStep: string | number = /^\d+$/.test(step) ? Number(step) : step;
+  return c.json({ ticker, step: responseStep, content });
 });
 
 export default steps;

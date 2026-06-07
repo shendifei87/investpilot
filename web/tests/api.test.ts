@@ -151,6 +151,27 @@ describe("GET /api/research/:ticker/step/:n", () => {
     expect(data.content).toContain("Wide moat");
   });
 
+  it("serves step 4 content", async () => {
+    const ws = path.join(ctx.workspacesDir, "TSLA");
+    fs.mkdirSync(ws);
+    fs.writeFileSync(ws + "/step4_assumption_research.md", "# Assumption Research");
+
+    const res = await ctx.app.request("/api/research/TSLA/step/4");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.step).toBe(4);
+    expect(data.content).toContain("Assumption Research");
+  });
+
+  it("rejects old split-step aliases", async () => {
+    const ws = path.join(ctx.workspacesDir, "TSLA");
+    fs.mkdirSync(ws);
+    fs.writeFileSync(ws + "/step4_assumption_research.md", "# Assumption Research");
+
+    const res = await ctx.app.request("/api/research/TSLA/step/4a");
+    expect(res.status).toBe(404);
+  });
+
   it("returns 404 for missing step file", async () => {
     const ws = path.join(ctx.workspacesDir, "TSLA");
     fs.mkdirSync(ws);

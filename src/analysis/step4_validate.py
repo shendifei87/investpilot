@@ -2,14 +2,12 @@
 
 Usage:
     from src.analysis.step4_validate import validate_step4
-    result = validate_step4("workspaces/600584.SH/step4_quantitative_model.md")
+    result = validate_step4("workspaces/600584.SH/step4_assumption_research.md")
 
 If result["passed"] is False, the LLM MUST fix issues before running Monte Carlo.
 
-Dual-track validation:
-  - Primary: if step4_structured_assumptions.json exists alongside the markdown,
-    validate structured data (real numbers, not keyword scraping).
-  - Fallback: if no JSON artifact, validate markdown with regex checks (backward compatible).
+Validation is structured-artifact only.  Markdown keyword scraping is not a
+valid Step 4 path.
 
 Checks (15 total):
   1. Required sections (driver decomposition, bridge, Q1 check, etc.)
@@ -32,10 +30,43 @@ Checks (15 total):
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
+from src.analysis._utils import coerce_float as _to_float, is_pct_variable as _is_pct_variable_name
+from src.analysis.evidence_registry import (
+    known_evidence_ids,
+    validate_step4_evidence_contract,
+)
 from src.analysis.step4_schema import STEP4_STRUCTURED_FILENAME
+from src.contracts import CORE_STEP_IDS, get_step_contract
+
+
+def _normalize_segments(structured: dict) -> list[dict]:
+    """Normalize segment_revenues from either format to a flat list of dicts.
+
+    Supports:
+      - List format: [{name, base_revenue, p50_growth, ...}, ...]
+      - Nested dict: {product_level: {SegName: {base, p50, p50_growth}, ...}, ...}
+    """
+    raw = structured.get("segment_revenues", []) or []
+    if isinstance(raw, list):
+        return [s for s in raw if isinstance(s, dict)]
+    if isinstance(raw, dict):
+        level_data = raw.get("product_level") or raw.get("geographic_level") or {}
+        if not isinstance(level_data, dict):
+            return []
+        result = []
+        for seg_name, seg_data in level_data.items():
+            if not isinstance(seg_data, dict):
+                continue
+            result.append({
+                "name": seg_name,
+                "base_revenue": seg_data.get("base", seg_data.get("base_revenue", 0)),
+                "p50_revenue": seg_data.get("p50", seg_data.get("p50_revenue", 0)),
+                "p50_growth": seg_data.get("p50_growth", 0),
+            })
+        return result
+    return []
 
 
 # ──────────────────────────────────────────────
@@ -53,48 +84,15 @@ def _load_structured_json(filepath: Path) -> dict | None:
         return None
 
 
-def _to_float(value) -> float | None:
-    """Best-effort float coercion for validator arithmetic."""
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip().replace(",", "")
-        if not text:
-            return None
-        is_pct = text.endswith("%")
-        text = text.rstrip("%xX")
-        try:
-            num = float(text)
-        except ValueError:
-            return None
-        return num / 100 if is_pct else num
-    return None
+# _to_float is imported from src.analysis._utils
 
 
 def _workspace_evidence_ids(workspace: Path) -> set[str]:
     """Collect structured evidence IDs known to this workspace."""
-    ids = {"calculated_valuation.json", "valuation_raw_inputs.json", "price_history.csv"}
-
-    material_path = workspace / "material_extracts.json"
-    if material_path.exists():
-        try:
-            data = json.loads(material_path.read_text(encoding="utf-8"))
-            ids.update(e.get("id", "") for e in data.get("extractions", []) if e.get("id"))
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass
-
-    consensus_path = workspace / "consensus_snapshot.json"
-    if consensus_path.exists():
-        try:
-            data = json.loads(consensus_path.read_text(encoding="utf-8"))
-            ids.update(g.get("id", "") for g in data.get("expectation_gaps", []) if g.get("id"))
-            ids.update(s.get("id", "") for s in data.get("snapshots", []) if s.get("id"))
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass
-
-    return ids
+    try:
+        return known_evidence_ids(workspace)
+    except Exception:
+        return {"calculated_valuation.json", "valuation_raw_inputs.json", "price_history.csv"}
 
 
 def _evidence_ref_ok(ref: str, known_ids: set[str]) -> bool:
@@ -155,7 +153,11 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
         if key == "growth_drivers":
             present = present and len(structured.get("growth_drivers", [])) > 0
         if key == "assumption_matrix":
-            present = present and len(structured.get("assumption_matrix", [])) > 0
+            am = structured.get("assumption_matrix", [])
+            if isinstance(am, dict):
+                present = present and len(am) > 0
+            else:
+                present = present and len(am) > 0
         checks.append({
             "check": f"required_section:{key}",
             "status": "PASS" if present else "MISSING",
@@ -196,7 +198,7 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
         })
 
     # ── Check 3: Segment sum vs total ──
-    segments = structured.get("segment_revenues", [])
+    segments = _normalize_segments(structured)
     if segments and len(segments) >= 2:
         component_segments = [
             s for s in segments
@@ -378,11 +380,19 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
 
     # ── Check 13: Valuation source ──
     val_src = structured.get("valuation_source", {})
-    if val_src and val_src.get("pe_calculated"):
+    # val_src can be a dict with pe_calculated, or a descriptive string that
+    # explicitly says the ratios were calculated from raw data.
+    if isinstance(val_src, dict) and val_src.get("pe_calculated"):
         checks.append({
             "check": "valuation_ratios_calculated",
             "status": "PASS",
             "detail": "Structured JSON confirms PE was calculated from source data",
+        })
+    elif isinstance(val_src, str) and _valuation_source_string_is_calculated(val_src):
+        checks.append({
+            "check": "valuation_ratios_calculated",
+            "status": "PASS",
+            "detail": f"Valuation source: {val_src[:100]}",
         })
     else:
         checks.append({
@@ -424,7 +434,7 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
 def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list[dict]:
     """Validate that segment growth comes from driver decomposition."""
     checks = []
-    segments = structured.get("segment_revenues", []) or []
+    segments = _normalize_segments(structured)
     driver_rows = structured.get("growth_drivers", []) or []
     known_ids = _workspace_evidence_ids(workspace)
 
@@ -434,7 +444,8 @@ def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list
         if row.get("segment")
     }
     missing_segments = []
-    weak_segments = []
+    depth_issues = []
+    structure_issues = []
     evidence_issues = []
     arithmetic_issues = []
 
@@ -448,27 +459,34 @@ def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list
             continue
 
         ds = row.get("drivers", []) or []
-        if len(ds) < 2:
-            weak_segments.append(f"{name}: needs >=2 drivers, got {len(ds)}")
+        if len(ds) < 2 or len(ds) > 4:
+            depth_issues.append(f"{name}: needs 2-4 drivers, got {len(ds)}")
 
         contributions = []
         for d in ds:
+            driver_name = d.get("name", "?")
+            if not d.get("name"):
+                structure_issues.append(f"{name}: driver missing name")
+            if not (d.get("derivation") or d.get("mechanism") or d.get("formula")):
+                structure_issues.append(
+                    f"{name}/{driver_name}: missing derivation/mechanism/formula"
+                )
             refs = d.get("evidence_ids") or d.get("evidence_id") or []
             if isinstance(refs, str):
                 refs = [refs]
             if not refs:
-                evidence_issues.append(f"{name}/{d.get('name', '?')}: missing evidence_ids")
+                evidence_issues.append(f"{name}/{driver_name}: missing evidence_ids")
             else:
                 bad_refs = [r for r in refs if not _evidence_ref_ok(str(r), known_ids)]
                 if bad_refs:
                     evidence_issues.append(
-                        f"{name}/{d.get('name', '?')}: unknown evidence refs {bad_refs}"
+                        f"{name}/{driver_name}: unknown evidence refs {bad_refs}"
                     )
 
             contrib = _to_float(d.get("contribution_pct"))
             if contrib is None:
                 arithmetic_issues.append(
-                    f"{name}/{d.get('name', '?')}: missing numeric contribution_pct"
+                    f"{name}/{driver_name}: missing numeric contribution_pct"
                 )
             else:
                 contributions.append(contrib)
@@ -476,7 +494,7 @@ def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list
         stated_growth = _to_float(segment.get("p50_growth"))
         if stated_growth is not None and len(contributions) == len(ds) and contributions:
             summed = sum(contributions)
-            if abs(summed - stated_growth) > 0.05:
+            if abs(summed - stated_growth) > 0.01:
                 arithmetic_issues.append(
                     f"{name}: driver contribution sum {summed:.1%} vs segment p50_growth {stated_growth:.1%}"
                 )
@@ -496,8 +514,26 @@ def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list
     })
     checks.append({
         "check": "driver_minimum_depth",
-        "status": "FAIL" if weak_segments else "PASS",
-        "detail": "; ".join(weak_segments) if weak_segments else "Each segment has at least two drivers",
+        "status": "FAIL" if depth_issues else "PASS",
+        "detail": "; ".join(depth_issues) if depth_issues else "Each segment has 2-4 drivers",
+    })
+    checks.append({
+        "check": "driver_quantified_decomposition",
+        "status": "FAIL" if structure_issues or missing_segments else "PASS",
+        "detail": (
+            "; ".join(structure_issues)
+            if structure_issues
+            else "Every driver has a named quantitative derivation/mechanism"
+        ),
+    })
+    checks.append({
+        "check": "no_bare_growth_rates",
+        "status": "FAIL" if missing_segments or depth_issues else "PASS",
+        "detail": (
+            "Bare segment growth rates are not allowed; every segment must have 2-4 quantified drivers"
+            if missing_segments or depth_issues
+            else "No bare segment growth rates detected"
+        ),
     })
     checks.append({
         "check": "driver_evidence_links",
@@ -513,21 +549,86 @@ def _validate_growth_driver_integrity(structured: dict, workspace: Path) -> list
     return checks
 
 
+def _normalize_assumption_matrix(structured: dict) -> list[dict]:
+    """Flatten nested-dict assumption_matrix into list-of-rows."""
+    raw = structured.get("assumption_matrix", []) or []
+    if isinstance(raw, list):
+        return raw
+    # nested dict: {period: {variable: {p10, p50, ...}}}
+    rows = []
+    for period_key, variables in raw.items():
+        if not isinstance(variables, dict):
+            continue
+        for var_name, pct_dict in variables.items():
+            if not isinstance(pct_dict, dict):
+                continue
+            row = dict(pct_dict)
+            row["variable"] = var_name
+            row["year"] = period_key
+            rows.append(row)
+    return rows
+
+
+def _valuation_source_string_is_calculated(value: str) -> bool:
+    """Allow descriptive valuation source strings only when they clearly say calculated."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    disallowed = [
+        "news",
+        "article",
+        "media",
+        "summary",
+        "broker",
+        "press release",
+        "新闻",
+        "媒体",
+        "摘要",
+        "研报",
+    ]
+    if any(token in text for token in disallowed):
+        return False
+    required = [
+        "calculated",
+        "self-calculated",
+        "computed from raw",
+        "raw financial data",
+        "source: calculated",
+        "自行计算",
+        "原始数据计算",
+    ]
+    return any(token in text for token in required)
+
+
+# _is_pct_variable_name is imported from src.analysis._utils
+
+
 def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]:
     """Validate variable-level assumptions before Monte Carlo."""
     checks = []
-    matrix = structured.get("assumption_matrix", []) or []
+    matrix = _normalize_assumption_matrix(structured)
     known_ids = _workspace_evidence_ids(workspace)
 
     missing_required = []
     evidence_issues = []
     high_sensitivity_vars = []
     matrix_vars = set()
+    decimal_format_issues = []
 
     for idx, row in enumerate(matrix):
         label = row.get("variable") or f"row_{idx}"
         matrix_vars.add(str(label))
-        required = ["variable", "p10", "p50", "p90", "sensitivity", "evidence_ids"]
+        required = [
+            "variable",
+            "p10",
+            "p50",
+            "p90",
+            "sensitivity",
+            "confidence",
+            "evidence_ids",
+            "derivation",
+            "what_would_change_this",
+        ]
         miss = [k for k in required if row.get(k) in (None, "", [])]
         if miss:
             missing_required.append(f"{label}: missing {miss}")
@@ -546,6 +647,17 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
         if str(row.get("sensitivity", "")).lower() == "high":
             high_sensitivity_vars.append(str(label))
 
+        # ── Decimal-form validation ──
+        if _is_pct_variable_name(str(label)):
+            for pct_key in ("p10", "p30", "p50", "p70", "p90"):
+                val = row.get(pct_key)
+                if val is not None and isinstance(val, (int, float)):
+                    if abs(float(val)) > 1.0:
+                        decimal_format_issues.append(
+                            f"{label}.{pct_key}={val} appears to be a whole-number % "
+                            f"(e.g. 20 meaning 20%). Store as decimal: {float(val)/100:.3f}"
+                        )
+
     contrarian = structured.get("contrarian_checks", []) or []
     contrarian_vars = {
         str(c.get("variable", ""))
@@ -554,6 +666,15 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
     }
     missing_contrarian = [v for v in high_sensitivity_vars if v not in contrarian_vars]
 
+    checks.append({
+        "check": "assumption_matrix_decimal_format",
+        "status": "FAIL" if decimal_format_issues else "PASS",
+        "detail": (
+            f"Percentage variables with whole-number format (use decimal: 20 → 0.20): {'; '.join(decimal_format_issues)}"
+            if decimal_format_issues
+            else "All percentage-type variables are in decimal form (e.g. 0.20 = 20%)"
+        ),
+    })
     checks.append({
         "check": "assumption_matrix_required_fields",
         "status": "FAIL" if missing_required else "PASS",
@@ -613,7 +734,7 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
 # ──────────────────────────────────────────────
 
 def validate_step4(filepath: str | Path) -> dict:
-    """Validate a Step 4 markdown file for structural and numerical consistency.
+    """Validate Step 4 structured assumptions for numerical consistency.
 
     Checks (14 total):
       1. All required sections present (driver decomposition, bridge, Q1 check, etc.)
@@ -636,19 +757,39 @@ def validate_step4(filepath: str | Path) -> dict:
     filepath = Path(filepath)
     if not filepath.exists():
         return {"passed": False, "error": f"File not found: {filepath}"}
+    if filepath.name == "step4_quantitative_model.md":
+        return {
+            "passed": False,
+            "error": (
+                "Deprecated Step 4 artifact is not accepted: "
+                "use step4_assumption_research.md, step5_financial_model.md, "
+                "and step6_monte_carlo_simulation.md."
+            ),
+        }
 
-    content = filepath.read_text(encoding="utf-8")
-
-    # ── Dual-track dispatch ──
     structured = _load_structured_json(filepath)
     if structured:
         checks = _validate_structured(structured, filepath)
         validation_mode = "structured_json"
     else:
-        checks = _legacy_regex_checks(content)
-        validation_mode = "regex_markdown"
+        checks = [{
+            "check": "structured_assumptions",
+            "status": "MISSING",
+            "detail": (
+                f"{STEP4_STRUCTURED_FILENAME} is required. "
+                "Markdown-only Step 4 validation is not allowed."
+            ),
+        }]
+        validation_mode = "structured_json_required"
 
     # ── Check 15: Workspace has calculated_valuation.json (always filesystem) ──
+    evidence_contract = validate_step4_evidence_contract(filepath.parent)
+    checks.append({
+        "check": "evidence_registry_material_coverage",
+        "status": "PASS" if evidence_contract.get("passed") else "FAIL",
+        "detail": evidence_contract.get("summary", "Evidence registry material coverage check failed"),
+    })
+
     calc_val_check = _check_workspace_calculated_valuation(filepath)
     checks.append(calc_val_check)
 
@@ -775,75 +916,6 @@ def validate_step4_with_guard(
     result["guard"] = guard
     return result
 
-
-def _legacy_regex_checks(content: str) -> list[dict]:
-    """Run checks 1-14 using regex on markdown content.
-
-    This is the legacy fallback path — used when step4_structured_assumptions.json
-    is not present. Kept for backward compatibility with existing workspaces.
-    """
-    checks = []
-
-    # ── Check 1: Required sections ──
-    required_sections = {
-        "driver_decomposition": ["驱动因子"],
-        "bridge_analysis": ["桥梁", "Bridge", "增量来源", "桥梁验证"],
-        "q1_check": ["Q1 约束", "quarterly_arithmetic_check", "隐含 Q2-Q4"],
-        "margin_derivation": ["成本结构", "毛利率推导", "成本项"],
-        "capacity_or_constraint": ["产能约束", "设计产能", "利用率", "约束检查", "瓶颈"],
-    }
-
-    for section_name, keywords in required_sections.items():
-        found = any(kw in content for kw in keywords)
-        status = "PASS" if found else "MISSING"
-        checks.append({
-            "check": f"required_section:{section_name}",
-            "status": status,
-            "detail": f"Looking for keywords: {keywords}",
-        })
-
-    # ── Check 2: Bridge arithmetic ──
-    checks.append(_check_bridge_arithmetic(content))
-
-    # ── Check 3: Segment sum vs total ──
-    checks.append(_check_segment_sum(content))
-
-    # ── Check 4: Q1 constraint not UNREASONABLE ──
-    checks.append(_check_q1_result(content))
-
-    # ── Check 5: Margin has derivation, not flat number ──
-    checks.append(_check_margin_derivation(content))
-
-    # ── Check 6: No "增速" without driver decomposition ──
-    checks.append(_check_growth_without_drivers(content))
-
-    # ── Check 7: Historical PE/PB anchoring ──
-    checks.append(_check_historical_valuation_anchor(content))
-
-    # ── Check 8: Peer comparison table ──
-    checks.append(_check_peer_comparison(content))
-
-    # ── Check 9: Reverse DCF results ──
-    checks.append(_check_reverse_dcf(content))
-
-    # ── Check 10: DCF cross-validation ──
-    checks.append(_check_dcf_cross_validation(content))
-
-    # ── Check 11: Contrarian Check per variable ──
-    checks.append(_check_contrarian_per_variable(content))
-
-    # ── Check 12: Assumption consistency self-check ──
-    checks.append(_check_assumption_consistency(content))
-
-    # ── Check 13: PE must be calculated, not from news/old data ──
-    checks.append(_check_pe_calculated_not_news(content))
-
-    # ── Check 14: Apple-to-apple PE comparison ──
-    checks.append(_check_pe_apple_to_apple(content))
-
-    return checks
-
-
 def validate_workspace_valuation(workspace_dir: str | Path) -> dict:
     """Validate that workspace has self-calculated valuation, not just API-fetched.
 
@@ -928,41 +1000,46 @@ def _check_workspace_calculated_valuation(filepath: str | Path) -> dict:
     }
 
 
-def validate_contrarian_checks(workspace_dir: str | Path) -> dict:
-    """Validate that all 7 step outputs contain their Contrarian Check sections.
+def validate_contrarian_checks(workspace_dir: str | Path, through_step: int | str = 9) -> dict:
+    """Validate that all serial step outputs contain Contrarian Check sections.
+
+    ``through_step`` lets Step 8 audit the pipeline before Step 9 exists while
+    keeping full 1-9 validation available after the director review.
 
     Returns a dict with per-step status and overall passed flag.
     """
     workspace_dir = Path(workspace_dir)
-    step_files = {
-        1: "step1_business_analysis.md",
-        2: "step2_competitive_moat.md",
-        3: "step3_marginal_changes.md",
-        4: "step4_quantitative_model.md",
-        5: "step5_rrr_strategy.md",
-        6: "step6_auditing.md",
-        7: "step7_research_director_review.md",
-    }
-
+    try:
+        through = int(str(through_step))
+    except ValueError:
+        through = 9
+    through = max(1, min(through, 9))
     contrarian_keywords = {
-        1: ["1.8", "逆向检验", "Contrarian Check"],
-        2: ["2.6", "逆向检验", "Contrarian Check"],
-        3: ["3.7", "逆向检验", "Contrarian Check"],
-        4: ["P50", "P10", "逆向检验", "压力测试", "场景压力"],
-        5: ["逆向检验", "RRR", "分布错误风险", "Edge Score"],
-        6: ["Red Team", "自我批判", "证伪路径"],
-        7: ["Director", "Override", "否决", "投资委员会"],
+        "1": ["1.8", "逆向检验", "Contrarian Check"],
+        "2": ["2.6", "逆向检验", "Contrarian Check"],
+        "3": ["3.7", "逆向检验", "Contrarian Check"],
+        "4": ["P50", "P10", "逆向检验", "Contrarian Check"],
+        "5": ["模型", "公式", "逆向检验", "Contrarian Check"],
+        "6": ["P50", "P10", "逆向检验", "压力测试", "场景压力"],
+        "7": ["逆向检验", "RRR", "分布错误风险", "Edge Score"],
+        "8": ["Red Team", "自我批判", "证伪路径"],
+        "9": ["Director", "Override", "否决", "投资委员会"],
     }
 
     results = {}
     all_passed = True
 
-    for step, filename in step_files.items():
-        filepath = workspace_dir / filename
+    for step in CORE_STEP_IDS:
+        if int(step) > through:
+            continue
+        artifact = get_step_contract(step).primary_artifact
+        filepath = workspace_dir / artifact
         if not filepath.exists():
+            filepath = None
+        if filepath is None:
             results[step] = {
                 "status": "MISSING_FILE",
-                "detail": f"{filename} not found",
+                "detail": f"{artifact} not found",
             }
             all_passed = False
             continue
@@ -973,7 +1050,10 @@ def validate_contrarian_checks(workspace_dir: str | Path) -> dict:
 
         results[step] = {
             "status": "PASS" if found else "MISSING",
-            "detail": f"Step {step} contrarian check {'found' if found else 'NOT found'} (looked for: {keywords})",
+            "detail": (
+                f"Step {step} contrarian check {'found' if found else 'NOT found'} "
+                f"(looked for: {keywords})"
+            ),
         }
         if not found:
             all_passed = False
@@ -982,527 +1062,4 @@ def validate_contrarian_checks(workspace_dir: str | Path) -> dict:
         "passed": all_passed,
         "steps": results,
         "summary": "All contrarian checks present" if all_passed else "Some contrarian checks missing — review required",
-    }
-
-
-def _check_bridge_arithmetic(content: str) -> dict:
-    """Check if bridge analysis numbers are present and roughly consistent."""
-    bridge_total_pattern = re.compile(
-        r'(?:桥梁验证|合计增量|增量合计).*?(\d+\.?\d*)\s*亿'
-    )
-    segment_total_pattern = re.compile(
-        r'\*\*合计\*\*.*?(\d+\.?\d*)\s*亿'
-    )
-
-    bridge_match = bridge_total_pattern.search(content)
-    segment_match = segment_total_pattern.search(content)
-
-    if not bridge_match and not segment_match:
-        return {
-            "check": "bridge_arithmetic",
-            "status": "SKIP",
-            "detail": "未找到桥梁分析数字，跳过算术验证",
-        }
-
-    if bridge_match and segment_match:
-        try:
-            bridge_val = float(bridge_match.group(1))
-            segment_val = float(segment_match.group(1))
-            diff_pct = abs(bridge_val - segment_val) / max(segment_val, 0.01)
-
-            if diff_pct < 0.05:
-                return {
-                    "check": "bridge_arithmetic",
-                    "status": "PASS",
-                    "detail": f"桥梁验证 {bridge_val}亿 ≈ 板块加总 {segment_val}亿 (差异 {diff_pct:.1%})",
-                }
-            else:
-                return {
-                    "check": "bridge_arithmetic",
-                    "status": "FAIL",
-                    "detail": f"桥梁验证 {bridge_val}亿 ≠ 板块加总 {segment_val}亿 (差异 {diff_pct:.1%} > 5%)。增量来源拆解与板块加总不一致。",
-                }
-        except (ValueError, ZeroDivisionError):
-            pass
-
-    return {
-        "check": "bridge_arithmetic",
-        "status": "SKIP",
-        "detail": "无法提取桥梁数字进行验证",
-    }
-
-
-def _check_segment_sum(content: str) -> dict:
-    """Check if individual segment revenues roughly add up to the total.
-
-    Dynamically extracts segment revenue data from markdown tables
-    by looking for table rows with numeric values in revenue columns.
-    No hardcoded sector names — works for any industry.
-    """
-    segment_revenues = []
-
-    # Match markdown table rows: | text | ... | number | ...
-    # Look for rows where the last numeric-looking cell is a revenue figure
-    # Pattern: | <segment_name> | ... | <revenue_number> | ...
-    for m in re.finditer(
-        r'\|\s*([^|]+?)\s*\|'  # first column (segment name)
-        r'(?:[^|]*\|){1,8}'     # 1-8 intermediate columns
-        r'\s*(\d+\.?\d*)\s*\|', # numeric value column
-        content,
-    ):
-        segment_name = m.group(1).strip()
-        try:
-            value = float(m.group(2))
-        except ValueError:
-            continue
-
-        # Skip header-like rows and total rows
-        if any(skip in segment_name.lower() for skip in ["板块", "合计", "total", "sum", "项目", "item"]):
-            continue
-        # Skip if segment name looks like a header (too short or all caps English)
-        if len(segment_name) < 2:
-            continue
-
-        segment_revenues.append(value)
-
-    if len(segment_revenues) < 2:
-        return {
-            "check": "segment_sum",
-            "status": "SKIP",
-            "detail": "未找到足够的板块收入数据",
-        }
-
-    return {
-        "check": "segment_sum",
-        "status": "PASS",
-        "detail": f"找到 {len(segment_revenues)} 个板块收入数据",
-    }
-
-
-def _check_q1_result(content: str) -> dict:
-    """Check if Q1 constraint result is present and not UNREASONABLE."""
-    unreasonable_indicators = [
-        "UNREASONABLE",
-        "不可接受",
-        "必须下调全年",
-    ]
-
-    has_q1_check = any(
-        kw in content for kw in ["隐含 Q2-Q4", "quarterly_arithmetic_check", "Q1 约束"]
-    )
-
-    if not has_q1_check:
-        return {
-            "check": "q1_constraint",
-            "status": "FAIL",
-            "detail": "缺少 Q1 约束检查。必须运行 quarterly_arithmetic_check 并展示结果。",
-        }
-
-    for indicator in unreasonable_indicators:
-        if indicator in content:
-            return {
-                "check": "q1_constraint",
-                "status": "FAIL",
-                "detail": f"Q1 约束检查结果为 {indicator}。不允许在 UNREASONABLE 的情况下继续。必须先下调全年假设。",
-            }
-
-    return {
-        "check": "q1_constraint",
-        "status": "PASS",
-        "detail": "Q1 约束检查存在且未标记为 UNREASONABLE",
-    }
-
-
-def _check_margin_derivation(content: str) -> dict:
-    """Check if margin was derived from cost structure, not just stated as a flat number."""
-    has_cost_breakdown = any(
-        kw in content for kw in ["材料成本", "成本结构拆解", "成本项.*假设"]
-    )
-    has_margin_formula = "1 -" in content or "1−" in content or "总成本 /" in content
-
-    if has_cost_breakdown and has_margin_formula:
-        return {
-            "check": "margin_derivation",
-            "status": "PASS",
-            "detail": "毛利率从成本结构推导",
-        }
-
-    if has_cost_breakdown:
-        return {
-            "check": "margin_derivation",
-            "status": "PASS",
-            "detail": "存在成本结构拆解（推导过程可能隐含）",
-        }
-
-    return {
-        "check": "margin_derivation",
-        "status": "FAIL",
-        "detail": "毛利率缺少成本结构推导。必须先拆解成本构成（材料/人工/折旧），再从成本增速推算毛利率，不能直接给出一个数字。",
-    }
-
-
-def _check_growth_without_drivers(content: str) -> dict:
-    """Check if growth rates are accompanied by driver decomposition."""
-    growth_tables = re.findall(r'P50.*?增速|P50.*?\+\d+%', content)
-    driver_tables = re.findall(r'驱动因子', content)
-
-    if len(growth_tables) > 3 and len(driver_tables) == 0:
-        return {
-            "check": "growth_has_drivers",
-            "status": "FAIL",
-            "detail": f"找到 {len(growth_tables)} 处增速假设但无驱动因子分解。每个板块的增速必须分解为可量化的驱动因子（如出货量×ASP、市场规模×份额、存量客户×客单价等，根据业务逻辑选择最合适的分解方式）。",
-        }
-
-    return {
-        "check": "growth_has_drivers",
-        "status": "PASS",
-        "detail": f"增速假设有驱动因子分解支撑 ({len(driver_tables)} 处)",
-    }
-
-
-def _check_historical_valuation_anchor(content: str) -> dict:
-    """Check if historical PE/PB anchoring is present."""
-    has_historical_pe = any(
-        kw in content for kw in [
-            "历史 PE", "历史PB", "PE 历史", "PB 历史",
-            "历史区间", "历史分位", "历史第", "历史百分位",
-            "min.*median.*max", "3-5 年 PE",
-        ]
-    )
-
-    if has_historical_pe:
-        return {
-            "check": "historical_valuation_anchor",
-            "status": "PASS",
-            "detail": "存在历史 PE/PB 锚定数据",
-        }
-
-    return {
-        "check": "historical_valuation_anchor",
-        "status": "FAIL",
-        "detail": "缺少历史 PE/PB 纵向锚定。必须提取公司 3-5 年 PE/PB 范围（min, median, max）和当前分位，作为估值假设的基础。",
-    }
-
-
-def _check_peer_comparison(content: str) -> dict:
-    """Check if peer comparison table with >=3 companies is present."""
-    has_peer_section = any(
-        kw in content for kw in [
-            "同业锚", "同业对比", "可比公司", "横向同业",
-            "Peer", "peer comparison",
-        ]
-    )
-
-    # Also check for table structure with multiple company rows
-    peer_table_rows = re.findall(
-        r'\|\s*(?:同业|对标|可比|竞争)\s*[A-Z][^|]*\|',
-        content,
-    )
-
-    if has_peer_section or len(peer_table_rows) >= 3:
-        return {
-            "check": "peer_comparison",
-            "status": "PASS",
-            "detail": f"存在同业对比（找到 {len(peer_table_rows)} 家可比公司）",
-        }
-
-    return {
-        "check": "peer_comparison",
-        "status": "FAIL",
-        "detail": "缺少同业横向对比。必须列出至少 3 家可比公司的 PE/PB/ROE，作为估值假设的横向锚。",
-    }
-
-
-def _check_reverse_dcf(content: str) -> dict:
-    """Check if Reverse DCF results are present."""
-    has_reverse_dcf = any(
-        kw in content for kw in [
-            "Reverse DCF", "reverse_dcf", "市场隐含增速",
-            "隐含增长率", "隐含 FCF",
-        ]
-    )
-
-    if has_reverse_dcf:
-        return {
-            "check": "reverse_dcf",
-            "status": "PASS",
-            "detail": "存在 Reverse DCF 市场隐含增速验证",
-        }
-
-    return {
-        "check": "reverse_dcf",
-        "status": "FAIL",
-        "detail": "缺少 Reverse DCF 验证。必须运行 reverse_dcf() 提取市场隐含增速，与 Step 3 预期差进行交叉验证。",
-    }
-
-
-def _check_dcf_cross_validation(content: str) -> dict:
-    """Check if DCF cross-validation results are present."""
-    has_dcf_cross = any(
-        kw in content for kw in [
-            "DCF 交叉验证", "DCF 交叉", "DCF 对比",
-            "dcf_model", "绝对估值", "DCF 内在价值",
-        ]
-    )
-
-    if has_dcf_cross:
-        return {
-            "check": "dcf_cross_validation",
-            "status": "PASS",
-            "detail": "存在 DCF 交叉验证",
-        }
-
-    return {
-        "check": "dcf_cross_validation",
-        "status": "FAIL",
-        "detail": "缺少 DCF 交叉验证。必须运行 dcf_model() 计算 P50 场景内在价值，与蒙特卡洛 P50 目标价对比（偏差 >30% 需解释）。",
-    }
-
-
-def _check_contrarian_per_variable(content: str) -> dict:
-    """Check if per-variable contrarian check table is present."""
-    has_contrarian_table = any(
-        kw in content for kw in [
-            "P50.*P10.*证据", "P50 → P10", "场景压力测试",
-            "正向压力测试",
-        ]
-    )
-
-    # Also look for table header pattern
-    contrarian_header = re.search(
-        r'变量.*P50.*P10.*证据',
-        content,
-    )
-
-    if has_contrarian_table or contrarian_header:
-        return {
-            "check": "contrarian_per_variable",
-            "status": "PASS",
-            "detail": "存在逐变量逆向检验表",
-        }
-
-    return {
-        "check": "contrarian_per_variable",
-        "status": "FAIL",
-        "detail": "缺少逐变量逆向检验。必须对每个关键变量回答'什么证据会让 P50 变成 P10'，并包含场景压力测试。",
-    }
-
-
-def _check_assumption_consistency(content: str) -> dict:
-    """Check if assumption consistency self-check is present."""
-    has_consistency = any(
-        kw in content for kw in [
-            "假设一致性自检", "审阅后静默修改",
-            "护城河评级一致", "板块分析一致",
-        ]
-    )
-
-    if has_consistency:
-        return {
-            "check": "assumption_consistency",
-            "status": "PASS",
-            "detail": "存在假设一致性自检",
-        }
-
-    return {
-        "check": "assumption_consistency",
-        "status": "FAIL",
-        "detail": "缺少假设一致性自检。必须回答：是否在审阅后修改了假设？PE 是否与护城河评级一致？营收增速是否与板块分析一致？",
-    }
-
-
-def _check_pe_calculated_not_news(content: str) -> dict:
-    """Check that valuation ratios (PE/PB/PS/EV_EBITDA) are calculated, not from news.
-
-    Looks for evidence that the analyst used calc_pe/calc_pb/calc_ps/calc_ev_ebitda
-    or calc_all_valuation_ratios to compute values from raw financial data,
-    rather than citing news articles or third-party reports.
-    """
-    # Positive signals: evidence of calculation from source data
-    calc_evidence = [
-        "calc_pe", "calc_pb", "calc_ps", "calc_ev_ebitda",
-        "calc_all_valuation_ratios", "calc_pe_trailing", "calc_pe_forward",
-        "price.*eps", "price.*EPS", "市价.*每股收益",
-        "股价.*EPS", "市值.*净利润",
-        "price / bvps", "price / revenue_per_share",
-        "EV.*EBITDA.*计算", "估值计算",
-        "source.*calculated", "source: calculated",
-        "来源：计算", "数据来源：计算",
-        "Forward PE.*=.*价格.*EPS",
-    ]
-    calc_found = sum(1 for pattern in calc_evidence if re.search(pattern, content, re.IGNORECASE))
-
-    # Negative signals: evidence of news/old data sourcing
-    news_indicators = [
-        "据.*报道.*PE", "新闻.*估值", "新浪.*PE", "东方财富.*PE",
-        "wind.*PE", "同花顺.*PE", "雪球.*PE",
-        "截至.*PE.*为",  # vague sourcing without calculation
-    ]
-    news_found = sum(1 for pattern in news_indicators if re.search(pattern, content, re.IGNORECASE))
-
-    # Check for explicit calculation traceability
-    has_formula = any(kw in content for kw in [
-        "PE =", "PE =", "PB =", "PS =", "EV/EBITDA =",
-        "Forward PE =", "PE(TTM) =", "PE(Forward) =",
-    ])
-
-    # Check for input disclosure (price and EPS/BPS/revenue mentioned near PE)
-    has_input_disclosure = bool(re.search(
-        r'(?:PE|PB|PS|EV/EBITDA).*?(?:=|：|calculated from).*?\d',
-        content, re.IGNORECASE,
-    ))
-
-    if calc_found >= 2 or (calc_found >= 1 and has_formula):
-        return {
-            "check": "valuation_ratios_calculated",
-            "status": "PASS",
-            "detail": f"估值指标有计算过程支撑（{calc_found} 处计算证据）",
-        }
-
-    if news_found > 0 and calc_found == 0:
-        return {
-            "check": "valuation_ratios_calculated",
-            "status": "FAIL",
-            "detail": (
-                "⚠️ 估值指标疑似来自新闻/第三方数据而非自行计算。"
-                "所有关键估值指标（PE、PB、PS、EV/EBITDA）必须通过 "
-                "calc_pe / calc_pb / calc_ps / calc_ev_ebitda / calc_all_valuation_ratios "
-                "从原始财报数据计算得出，禁止直接使用新闻或过时数据。"
-                "每次计算必须标注 price、EPS/BPS/revenue 等输入值和来源。"
-            ),
-        }
-
-    if has_input_disclosure or has_formula:
-        return {
-            "check": "valuation_ratios_calculated",
-            "status": "PASS",
-            "detail": "估值指标有输入值披露和计算公式",
-        }
-
-    # Warn if no clear evidence either way
-    return {
-        "check": "valuation_ratios_calculated",
-        "status": "FAIL",
-        "detail": (
-            "缺少估值指标的计算过程追溯。必须明确展示："
-            "1) 使用的 price（股价）值和日期；"
-            "2) 使用的 EPS/BPS/revenue 值和来源（年报/季报/预测）；"
-            "3) 计算公式（如 PE = Price / EPS = XX / YY = ZZx）；"
-            "4) 标注 source: calculated。"
-        ),
-    }
-
-
-def _check_pe_apple_to_apple(content: str) -> dict:
-    """Check that all PE comparisons are apple-to-apple (same year, same basis).
-
-    Detects:
-    1. Trailing PE vs Forward PE mixed in same comparison table
-    2. Forward T+1 PE vs Forward T+2 PE mixed in same comparison table
-    3. Mixed valuation metrics in same comparison (PE vs PB etc.)
-    """
-    violations = []
-
-    # ── Check 1: Trailing vs Forward mixed ──
-    # Find comparison tables that mix TTM/trailing with Forward/T+N
-    has_trailing = bool(re.search(
-        r'(?:PE\(TTM\)|PE.*TTM|trailing.*PE|市盈率.*TTM|滚动市盈率|静态.*PE|PE.*静态)',
-        content, re.IGNORECASE,
-    ))
-    has_forward = bool(re.search(
-        r'(?:PE\(Forward\)|Forward.*PE|PE.*Forward|PE.*T\+1|PE.*T\+2|PE.*202[5-9]E|预测PE|动态PE)',
-        content, re.IGNORECASE,
-    ))
-
-    # Check if they appear in the same comparison context (same table or section)
-    # Look for tables that have both TTM and Forward labels
-    mixed_in_table = re.findall(
-        r'(?:\|[^|]*TTM[^|]*\|[^|]*Forward[^|]*\||\|[^|]*Forward[^|]*\|[^|]*TTM[^|]*\|)',
-        content, re.IGNORECASE,
-    )
-
-    # Also check for PE values that appear to be from different years in the same row
-    # E.g., "目标公司 PE 26x vs 同业 Forward PE 27x"
-    mixed_inline = re.findall(
-        r'(?:PE.*?26.*?Forward.*?27|PE.*?27.*?TTM.*?26|trailing.*?\d+x.*?forward.*?\d+x)',
-        content, re.IGNORECASE,
-    )
-
-    if mixed_in_table or mixed_inline:
-        violations.append("同业对比表中混合了 Trailing PE 和 Forward PE，这是不合理的比较")
-
-    # ── Check 2: Forward T+1 vs T+2 mixed ──
-    # Find if different forward years are used in the same comparison
-    forward_years_used = set()
-    for match in re.finditer(
-        r'(?:Forward PE|PE).*?(?:T\+(\d)|(\d{4})E)',
-        content, re.IGNORECASE,
-    ):
-        if match.group(1):
-            forward_years_used.add(f"T+{match.group(1)}")
-        elif match.group(2):
-            forward_years_used.add(f"{match.group(2)}E")
-
-    # Check if peer comparison section mixes forward years
-    peer_section = re.search(
-        r'(?:同业.*?对比|同业.*?锚|Peer.*?Comparison|横向同业)(.*?)(?:\n#{1,3}\s|\Z)',
-        content, re.DOTALL | re.IGNORECASE,
-    )
-
-    if peer_section:
-        peer_text = peer_section.group(1)
-        years_in_peer = set()
-        for m in re.finditer(
-            r'(?:T\+(\d)|(\d{4})E)',
-            peer_text,
-        ):
-            if m.group(1):
-                years_in_peer.add(f"T+{m.group(1)}")
-            elif m.group(2):
-                years_in_peer.add(f"{m.group(2)}E")
-
-        if len(years_in_peer) > 1:
-            violations.append(
-                f"同业对比中混合了不同的 Forward 年份: {years_in_peer}。"
-                "T+1 PE 和 T+2 PE 不可直接比较。所有公司必须使用相同的 Forward 年份。"
-            )
-
-    # ── Check 3: PE Band uses consistent year ──
-    # Forward PE Band should use the same forward EPS as the Monte Carlo
-    pe_band_section = re.search(
-        r'(?:Forward PE Band|PE Band)(.*?)(?:\n#{1,3}\s|\Z)',
-        content, re.DOTALL | re.IGNORECASE,
-    )
-    monte_carlo_section = re.search(
-        r'(?:蒙特卡洛|Monte Carlo)(.*?)(?:\n#{1,3}\s|\Z)',
-        content, re.DOTALL | re.IGNORECASE,
-    )
-
-    if pe_band_section and monte_carlo_section:
-        # Check that PE Band and Monte Carlo reference the same year
-        band_years = set(re.findall(r'(T\+\d|\d{4}E)', pe_band_section.group(1)))
-        mc_years = set(re.findall(r'(T\+\d|\d{4}E)', monte_carlo_section.group(1)))
-
-        if band_years and mc_years and band_years != mc_years:
-            violations.append(
-                f"PE Band 使用的年份 ({band_years}) 与蒙特卡洛 ({mc_years}) 不一致。"
-                "两者必须使用相同的 Forward 年份。"
-            )
-
-    if violations:
-        return {
-            "check": "apple_to_apple_valuation",
-            "status": "FAIL",
-            "detail": (
-                "估值比较不是 apple-to-apple: " + "; ".join(violations) + "。"
-                "规则：1) Trailing PE 和 Forward PE 不可混比；"
-                "2) 不同 Forward 年份（T+1 vs T+2）不可混比；"
-                "3) 同一对比表中所有公司必须使用相同的指标口径和年份。"
-            ),
-        }
-
-    return {
-        "check": "apple_to_apple_valuation",
-        "status": "PASS",
-        "detail": "估值比较通过 apple-to-apple 检查",
     }

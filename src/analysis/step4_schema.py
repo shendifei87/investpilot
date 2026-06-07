@@ -18,7 +18,7 @@ STEP4_STRUCTURED_FILENAME = "step4_structured_assumptions.json"
 
 
 STEP4_SCHEMA_DESCRIPTION = {
-    "version": 1,
+    "version": 2,
     "required_top_level_keys": [
         "segment_revenues",
         "growth_drivers",
@@ -41,12 +41,57 @@ STEP4_SCHEMA_DESCRIPTION = {
     },
     "growth_drivers": {
         "required": ["segment", "drivers"],
-        "driver_required": ["name", "contribution_pct", "evidence_ids"],
+        "driver_required": ["name", "contribution_pct", "evidence_ids", "derivation"],
+        "driver_encouraged": ["base_value", "unit", "growth_T+1", "growth_T+2", "growth_T+3"],
         "minimum_drivers_per_segment": 2,
+        "maximum_drivers_per_segment": 4,
+        "note": "Drivers MUST include explicit base_value + per-period growth_* for formula-linked Excel. contribution_pct-only mode is blocked in Step 5.",
     },
     "assumption_matrix": {
-        "required": ["variable", "p10", "p50", "p90", "sensitivity", "evidence_ids"],
-        "recommended": ["p30", "p70", "confidence", "segment", "year"],
+        "required": [
+            "variable",
+            "p10",
+            "p50",
+            "p90",
+            "sensitivity",
+            "confidence",
+            "evidence_ids",
+            "derivation",
+            "what_would_change_this",
+        ],
+        "recommended": ["p30", "p70", "segment", "year"],
+        "percentile_format_note": "All growth/margin/ratio values must be in decimal form (0.20 = 20%). Values > 1.0 for percentage-type variables are rejected at validation.",
+    },
+    "financial_model_inputs": {
+        "required": [
+            "shares_outstanding",
+            "diluted_shares",
+            "cash",
+            "debt",
+            "equity",
+            "nwc_ratio",
+            "ppe_ratio",
+            "other_assets_ratio",
+            "ap_ratio",
+            "dividend_payout",
+            "da_ratio",
+            "capex_ratio",
+            "interest_rate_on_debt",
+            "interest_rate_on_cash",
+            "annual_share_dilution_pct",
+        ],
+        "recommended": [
+            "ar_days",
+            "inv_days",
+            "ap_days",
+            "intangible_assets",
+            "deferred_rev_ratio",
+            "accrued_ratio",
+            "other_ncl_ratio",
+            "st_debt",
+            "lt_debt",
+        ],
+        "note": "diluted_shares is required (not defaulted). ar_days/inv_days/ap_days drive BS formula-linked items; if absent, BS items are hard-coded with a warning.",
     },
 }
 
