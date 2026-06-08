@@ -670,6 +670,38 @@ def _auto_calculate_valuation(results, output_dir):
         logger.warning("Auto-calculation failed: %s", e)
 
 
+def cmd_verify_news(args):
+    """验证 WebSearch 结果的发布日期，防止过期新闻误引。"""
+    from src.utils.web_date_verifier import (
+        verify_url, verify_evidence_list, print_verification_report,
+    )
+
+    if args.url:
+        from dataclasses import asdict
+        result = verify_url(args.url, max_age_days=args.max_age, timeout=args.timeout)
+        if args.json:
+            print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+        else:
+            print_verification_report([asdict(result)])
+    elif args.input:
+        with open(args.input, "r", encoding="utf-8") as f:
+            evidence = json.load(f)
+        results = verify_evidence_list(evidence, max_age_days=args.max_age, timeout=args.timeout)
+        if args.json:
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+        else:
+            print_verification_report(results)
+    else:
+        # Read from stdin
+        import sys
+        evidence = json.load(sys.stdin)
+        results = verify_evidence_list(evidence, max_age_days=args.max_age, timeout=args.timeout)
+        if args.json:
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+        else:
+            print_verification_report(results)
+
+
 def cmd_fetch_peers(args):
     """Fetch financial data for peer companies for comparison."""
     fetcher, normalized, market = get_fetcher(args.target)
@@ -916,6 +948,18 @@ def main():
     p_workflow.add_argument("--reason", help="Block reason")
     p_workflow.add_argument("--force", action="store_true", help="Override workflow guard intentionally")
     p_workflow.set_defaults(func=cmd_workflow)
+
+    # ── Web date verification ────────────────────────
+    p_verify = subparsers.add_parser(
+        "verify-news",
+        help="验证 WebSearch 结果的实际发布日期，防止过期新闻误引",
+    )
+    p_verify.add_argument("input", nargs="?", help="JSON 文件路径（证据列表）")
+    p_verify.add_argument("--url", help="单个 URL 验证")
+    p_verify.add_argument("--max-age", type=int, default=90, help="最大允许天数 (default: 90)")
+    p_verify.add_argument("--timeout", type=int, default=15, help="HTTP 超时秒数")
+    p_verify.add_argument("--json", action="store_true", help="输出 JSON 格式")
+    p_verify.set_defaults(func=cmd_verify_news)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

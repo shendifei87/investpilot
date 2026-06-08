@@ -415,32 +415,43 @@ def _extract_current_price(ws: Path, mc: dict, cv: dict | None, read_model_text)
 
 
 def _extract_target_price(ws: Path, mc: dict, sa: dict | None, read_model_text) -> str | None:
-    """Extract P50 target_price from JSON artifacts or markdown."""
+    """Extract P50 target_price from JSON artifacts or markdown.
+
+    Priority: monte_carlo_results.json > step4 structured > bridge_analysis > regex.
+    Year-like numbers (19xx-20xx) and numbers in year context are excluded.
+    """
+    # Priority 1: monte_carlo_results.json p50_case.target_price_hkd
     if mc.get('p50_target') is not None:
         tp = mc['p50_target']
         return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+    if isinstance(mc.get('p50_case'), dict):
+        tp = mc['p50_case'].get('target_price_hkd')
+        if tp is not None:
+            return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+    # Priority 2: step4 bridge_analysis
+    if sa and isinstance(sa, dict):
+        bridge = sa.get('bridge_analysis', {})
+        t1 = bridge.get('t1_2026E', {})
+        tp = t1.get('target_price_hkd')
+        if tp is not None:
+            return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+        # Fallback within step4: search bridge keys
+        for bk, bv in bridge.items():
+            if isinstance(bv, dict) and bv.get('target_price_hkd') is not None:
+                tp = bv['target_price_hkd']
+                return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
+    # Priority 3: step4 financial_model_inputs
     if sa and isinstance(sa, dict):
         fmi = sa.get('financial_model_inputs', {})
         if fmi.get('p50_target_hkd') is not None:
             tp = fmi['p50_target_hkd']
             return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
-        if fmi.get('p50_eps_cny') is not None:
-            eps = fmi.get('p50_eps_cny', 0)
-            fx = fmi.get('hkd_cny', 1.0)
-            _am = sa.get('assumption_matrix', {})
-            if not isinstance(_am, dict):
-                _am = {}
-            for period_key in ('T1_FY2026E', 'T1', 'FY1'):
-                period = _am.get(period_key, {})
-                pe_dist = period.get('pe_multiple', period.get('pe', {}))
-                if isinstance(pe_dist, dict):
-                    p50_pe = pe_dist.get('p50', pe_dist.get('50'))
-                    if p50_pe and eps and fx:
-                        return f"{eps * p50_pe / fx:.2f}"
-    # Regex fallback
+    # Regex fallback — with year exclusion
     s4 = read_model_text()
     target_keywords = ("目标价", "target price", "target_price", "p50 target", "p50目标价")
     labeled_candidates = []
+    # Year-like numbers to exclude: 19xx-20xx
+    YEAR_PATTERN = re.compile(r'^(19\d\d|20\d\d)$')
     for line in s4.splitlines():
         low = line.lower()
         if "p50" not in low:
@@ -450,13 +461,15 @@ def _extract_target_price(ws: Path, mc: dict, sa: dict | None, read_model_text) 
         nums = re.findall(r'(?<![-\d.])(\d+(?:\.\d+)?)(?![%\d.])', line)
         for num in nums:
             try:
-                if float(num) >= 10.0:
+                fnum = float(num)
+                # Exclude year-like numbers and unreasonably large prices
+                if fnum >= 10.0 and fnum <= 500.0 and not YEAR_PATTERN.match(num):
                     labeled_candidates.append(num)
             except ValueError:
                 continue
     header_tp = None
     m = re.search(r'P50\s*目标价[：:]*\s*[~～]?([\d.]+)', s4)
-    if m and float(m.group(1)) >= 1.0:
+    if m and float(m.group(1)) >= 1.0 and not YEAR_PATTERN.match(m.group(1)):
         header_tp = m.group(1)
     compute_tp = None
     m = re.search(r'[Tt]arget\s*=\s*[\d.]+\s*[*×/]\s*[\d.]+\s*/\s*[\d.]+\s*=\s*([\d.]+)\s*HKD', s4)
@@ -718,10 +731,10 @@ def _auto_embed_workspace_images(ws: Path, sections_html: str) -> str:
     if not png_files:
         return sections_html
 
-    # Detect already-embedded images by filename
+    # Detect already-embedded images by actual base64 data URIs in the HTML
     already_embedded = {
         png.name for png in png_files
-        if png.stem in sections_html or png.name in sections_html
+        if f'data-source="{png.name}"' in sections_html
     }
 
     # Group un-embedded PNGs by target step
@@ -1109,72 +1122,120 @@ def generate_report_html(
 
     # --- Auto-generate Monte Carlo distribution chart from structured assumptions ---
     sa_path = ws / "step4_structured_assumptions.json"
+    mc_dist_generated = False
     if sa_path.exists():
         try:
             sa = json.loads(sa_path.read_text(encoding='utf-8'))
-            _am_raw = sa.get("assumption_matrix", {})
-            _am = _am_raw if isinstance(_am_raw, dict) else {}
-            am = _am.get("T1_FY2026E", {})
             fmi = sa.get("financial_model_inputs", {})
 
-            rg = am.get("revenue_growth", {})
-            npm = am.get("npm") or am.get("net_profit_margin") or {}
-            pe = am.get("pe_fwd_t1") or am.get("pe_multiple") or am.get("pe") or {}
+            # Helper: extract P10/P30/P50/P70/P90 from a list-based assumption_matrix
+            def _find_in_matrix(am_list, variable, year="2026E"):
+                for item in am_list if isinstance(am_list, list) else []:
+                    if item.get("variable") == variable and item.get("year") == year:
+                        return item
+                return None
 
-            # JSON keys may be strings ("10") or ints (10) — normalize
-            def _pct_get(d, pct):
-                if not isinstance(d, dict):
-                    return None
-                return d.get(f"p{pct}", d.get(str(pct), d.get(pct)))
+            # Approach A (new): list-based assumption_matrix
+            am_raw = sa.get("assumption_matrix", [])
+            if isinstance(am_raw, list):
+                eps_item = _find_in_matrix(am_raw, "eps")
+                pe_item = _find_in_matrix(am_raw, "pe")
+                if eps_item and pe_item:
+                    pcts = [10, 30, 50, 70, 90]
+                    has_eps = all(p in eps_item for p in ["p10", "p50", "p90"])
+                    has_pe = all(p in pe_item for p in ["p10", "p50", "p90"])
+                    if has_eps and has_pe:
+                        price_pcts = {}
+                        for p in pcts:
+                            eps_val = eps_item.get(f"p{p}")
+                            pe_val = pe_item.get(f"p{p}")
+                            if eps_val is not None and pe_val is not None:
+                                price_pcts[p] = float(eps_val) * float(pe_val)
+                        if all(p in price_pcts for p in [10, 50, 90]):
+                            mc_png = ws / "monte_carlo_distribution.png"
+                            cur_price = sa.get("current_price_hkd")
+                            generate_distribution_from_percentiles(
+                                p10=price_pcts[10],
+                                p30=price_pcts.get(30, (price_pcts[10] + price_pcts[50]) / 2),
+                                p50=price_pcts[50],
+                                p70=price_pcts.get(70, (price_pcts[50] + price_pcts[90]) / 2),
+                                p90=price_pcts[90],
+                                title=f"{ticker} Monte Carlo Target Price Distribution (50K runs, t-Copula df=6)",
+                                current_price=cur_price,
+                                save_path=mc_png,
+                                currency=currency,
+                            )
+                            if mc_png.exists():
+                                print(f"  ✓ Monte Carlo distribution chart generated: {mc_png}")
+                                mc_dist_generated = True
 
-            def _ratio_value(d, pct):
-                value = _pct_get(d, pct)
-                if value is None:
-                    return None
-                value = float(value)
-                return value / 100.0 if abs(value) > 1.0 else value
+            # Approach B (legacy): dict-based assumption_matrix with T1_FY2026E
+            if not mc_dist_generated and isinstance(am_raw, dict):
+                _am = am_raw
+                am = _am.get("T1_FY2026E", {})
+                rg = am.get("revenue_growth", {})
+                npm = am.get("npm", am.get("net_profit_margin", {}))
+                pe = am.get("pe_fwd_t1", am.get("pe_multiple", am.get("pe", {})))
 
-            def _number_value(d, pct):
-                value = _pct_get(d, pct)
-                return None if value is None else float(value)
+                def _pct_get(d, pct):
+                    return d.get(f"p{pct}", d.get(str(pct), d.get(pct))) if isinstance(d, dict) else None
+                def _ratio_value(d, pct):
+                    v = _pct_get(d, pct)
+                    if v is None: return None
+                    v = float(v)
+                    return v / 100.0 if abs(v) > 1.0 else v
+                def _number_value(d, pct):
+                    v = _pct_get(d, pct)
+                    return float(v) if v is not None else None
 
-            required_pcts = [10, 30, 50, 70, 90]
-            has_all = all(
-                _ratio_value(rg, p) is not None
-                and _ratio_value(npm, p) is not None
-                and _number_value(pe, p) is not None
-                for p in required_pcts
-            )
+                required_pcts = [10, 30, 50, 70, 90]
+                if all(_ratio_value(rg, p) is not None and _ratio_value(npm, p) is not None and _number_value(pe, p) is not None for p in required_pcts):
+                    base_rev = sa.get("base_revenue_cny_m", 0)
+                    shares = fmi.get("shares_outstanding", 1)
+                    fx = fmi.get("hkd_cny", 1.0)
+                    if base_rev and shares and fx and float(shares) > 0 and float(fx) > 0:
+                        price_pcts = {}
+                        for p in required_pcts:
+                            rev = float(base_rev) * (1 + _ratio_value(rg, p))
+                            ni = rev * _ratio_value(npm, p)
+                            eps = ni * 1e4 / float(shares)
+                            target = eps * _number_value(pe, p) / float(fx)
+                            price_pcts[p] = target
+                        mc_png = ws / "monte_carlo_distribution.png"
+                        cur_price = sa.get("current_price_hkd")
+                        generate_distribution_from_percentiles(
+                            p10=price_pcts[10], p30=price_pcts[30], p50=price_pcts[50],
+                            p70=price_pcts[70], p90=price_pcts[90],
+                            title=f"{ticker} Monte Carlo Target Price Distribution (50K runs)",
+                            current_price=cur_price, save_path=mc_png, currency=currency,
+                        )
+                        if mc_png.exists():
+                            print(f"  ✓ Monte Carlo distribution chart generated: {mc_png}")
+                            mc_dist_generated = True
 
-            if rg and npm and pe and has_all:
-                base_rev = sa.get("base_revenue_cny_m", 0)
-                shares = fmi.get("shares_outstanding", 1)
-                fx = fmi.get("hkd_cny", 1.0)
-
-                if base_rev and shares and fx and float(shares) > 0 and float(fx) > 0:
-                    price_pcts = {}
-                    for pct in required_pcts:
-                        rev = float(base_rev) * (1 + _ratio_value(rg, pct))
-                        ni = rev * _ratio_value(npm, pct)
-                        eps = ni * 1e4 / float(shares)  # rev in 万元 → CNY
-                        target = eps * _number_value(pe, pct) / float(fx)  # HKD
-                        price_pcts[pct] = target
-
-                    mc_png = ws / "monte_carlo_distribution.png"
-                    cur_price = sa.get("current_price_hkd")
-                    generate_distribution_from_percentiles(
-                        p10=price_pcts[10],
-                        p30=price_pcts[30],
-                        p50=price_pcts[50],
-                        p70=price_pcts[70],
-                        p90=price_pcts[90],
-                        title=f"{ticker} Monte Carlo Target Price Distribution (50K runs)",
-                        current_price=cur_price,
-                        save_path=mc_png,
-                        currency=currency,
-                    )
-                    if mc_png.exists():
-                        print(f"  ✓ Monte Carlo distribution chart generated: {mc_png}")
+            # Approach C: fallback to monte_carlo_results.json
+            if not mc_dist_generated:
+                mc_json = ws / "monte_carlo_results.json"
+                if mc_json.exists():
+                    mc_data = json.loads(mc_json.read_text(encoding='utf-8'))
+                    p10_data = mc_data.get("p10_case", {})
+                    p50_data = mc_data.get("p50_case", {})
+                    p90_data = mc_data.get("p90_case", {})
+                    if p10_data.get("target_price_hkd") and p50_data.get("target_price_hkd") and p90_data.get("target_price_hkd"):
+                        mc_png = ws / "monte_carlo_distribution.png"
+                        generate_distribution_from_percentiles(
+                            p10=p10_data["target_price_hkd"],
+                            p30=(p10_data["target_price_hkd"] + p50_data["target_price_hkd"]) / 2,
+                            p50=p50_data["target_price_hkd"],
+                            p70=(p50_data["target_price_hkd"] + p90_data["target_price_hkd"]) / 2,
+                            p90=p90_data["target_price_hkd"],
+                            title=f"{ticker} Monte Carlo Target Price Distribution (10K runs, t-Copula df=6)",
+                            current_price=sa.get("current_price_hkd") if sa else None,
+                            save_path=mc_png,
+                            currency=currency,
+                        )
+                        if mc_png.exists():
+                            print(f"  ✓ Monte Carlo distribution chart generated from monte_carlo_results.json")
         except Exception as e:
             logger.warning("Monte Carlo chart generation skipped: %s", e)
 
