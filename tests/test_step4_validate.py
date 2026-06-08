@@ -160,6 +160,20 @@ def _full_valid_structured() -> dict:
                 "what_would_change_this": "Input cost inflation exceeds pricing pass-through.",
             },
             {
+                "variable": "opex_ratio", "segment": "total", "year": "T+1",
+                "p10": 0.18, "p30": 0.20, "p50": 0.22, "p70": 0.24, "p90": 0.26,
+                "sensitivity": "medium", "confidence": "medium", "evidence_ids": ["DATA:costs"],
+                "derivation": "Operating expense ratio derived from historical cost structure.",
+                "what_would_change_this": "Hiring and R&D spend ramps faster than revenue.",
+            },
+            {
+                "variable": "tax_rate", "segment": "total", "year": "T+1",
+                "p10": 0.15, "p30": 0.18, "p50": 0.20, "p70": 0.22, "p90": 0.25,
+                "sensitivity": "medium", "confidence": "medium", "evidence_ids": ["DATA:tax"],
+                "derivation": "Effective tax rate anchored to recent statutory and effective rates.",
+                "what_would_change_this": "Jurisdiction mix or tax policy changes materially.",
+            },
+            {
                 "variable": "pe", "segment": "company", "year": "T+1",
                 "p10": 15, "p30": 18, "p50": 22, "p70": 27, "p90": 35,
                 "sensitivity": "high", "confidence": "medium", "evidence_ids": ["CALC:calculated_valuation.json"],
@@ -199,6 +213,23 @@ def _full_valid_structured() -> dict:
             {"variable": "gross_margin", "p50": 0.45, "p10": 0.35, "evidence_to_flip": "Price war"},
             {"variable": "pe", "p50": 22, "p10": 15, "evidence_to_flip": "Sector de-rating"},
         ],
+        "financial_model_inputs": {
+            "shares_outstanding": 1000000000,
+            "diluted_shares": 1020000000,
+            "cash": 5000000000,
+            "debt": 1000000000,
+            "equity": 20000000000,
+            "nwc_ratio": 0.05,
+            "ppe_ratio": 0.08,
+            "other_assets_ratio": 0.04,
+            "ap_ratio": 0.05,
+            "dividend_payout": 0.30,
+            "da_ratio": 0.02,
+            "capex_ratio": 0.04,
+            "interest_rate_on_debt": 0.05,
+            "interest_rate_on_cash": 0.02,
+            "annual_share_dilution_pct": 0.01,
+        },
         "assumption_consistency": {
             "post_review_changes": False,
             "pe_moat_aligned": True,
@@ -250,6 +281,8 @@ class TestStructuredValidation:
             "assumptions": {
                 "rev_growth": {"p10": 0.03, "p50": 0.1167, "p90": 0.19},
                 "gross_margin": {"p10": 0.35, "p50": 0.45, "p90": 0.52},
+                "opex_ratio": {"p10": 0.18, "p50": 0.22, "p90": 0.26},
+                "tax_rate": {"p10": 0.15, "p50": 0.20, "p90": 0.25},
                 "pe": {"p10": 15, "p50": 22, "p90": 35},
             },
         }), encoding="utf-8")
@@ -458,6 +491,31 @@ class TestStructuredValidation:
         required = [c for c in result["checks"] if c["check"] == "assumption_matrix_required_fields"]
         assert required[0]["status"] == "FAIL"
 
+    def test_missing_financial_model_inputs_fails(self, tmp_path):
+        structured = _full_valid_structured()
+        del structured["financial_model_inputs"]
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+
+        result = validate_step4(md_path)
+
+        required = [c for c in result["checks"] if c["check"] == "financial_model_inputs_required_fields"]
+        assert required[0]["status"] == "FAIL"
+
+    def test_missing_step5_model_variable_fails(self, tmp_path):
+        structured = _full_valid_structured()
+        structured["assumption_matrix"] = [
+            row for row in structured["assumption_matrix"]
+            if row.get("variable") != "tax_rate"
+        ]
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+
+        result = validate_step4(md_path)
+
+        coverage = [c for c in result["checks"] if c["check"] == "assumption_matrix_model_variable_coverage"]
+        assert coverage[0]["status"] == "FAIL"
+
     def test_missing_material_sidecar_fails_evidence_contract(self, tmp_path):
         structured = _full_valid_structured()
         md_path = _write_step4_md(tmp_path)
@@ -594,6 +652,8 @@ class TestStep4Guard:
             "assumptions": {
                 "rev_growth": {"p10": 0.03, "p50": 0.1167, "p90": 0.19},
                 "gross_margin": {"p10": 0.35, "p50": 0.45, "p90": 0.52},
+                "opex_ratio": {"p10": 0.18, "p50": 0.22, "p90": 0.26},
+                "tax_rate": {"p10": 0.15, "p50": 0.20, "p90": 0.25},
                 "pe": {"p10": 15, "p50": 22, "p90": 35},
             },
         }), encoding="utf-8")

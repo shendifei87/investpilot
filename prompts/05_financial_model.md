@@ -218,7 +218,8 @@ The Excel workbook must follow institutional standards:
 ### 2.5 Market Adaptation
 
 - **A-share**: Historical financials from Tushare `income`/`balancesheet`/`cashflow` APIs. Report in CNY. Follow PRC GAAP line item conventions.
-- **HK**: Historical financials from AKShare `stock_hk_finance()`. Report in HKD or RMB (match company reporting currency). Follow HKFRS conventions.
+- **HK**: Historical financials from AKShare `stock_hk_financial_indicator_em()` + `stock_hk_daily()`. Report in HKD or RMB (match company reporting currency). Follow HKFRS conventions.
+- **WebFetch fallback**: If IR pages are blocked by security policy, use alternative domains listed in `config/ir_domains.py`.
 - **US**: Historical financials from SEC EDGAR (10-K/K-10). Report in USD. Follow US GAAP conventions.
 
 ## Phase 3: DCF Cross-Validation (Mandatory Skill)

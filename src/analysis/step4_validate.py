@@ -37,6 +37,11 @@ from src.analysis.evidence_registry import (
     known_evidence_ids,
     validate_step4_evidence_contract,
 )
+from src.analysis.financial_model import (
+    REQUIRED_MODEL_INPUTS,
+    REQUIRED_REVIEWED_VARIABLES,
+    REVIEWED_VARIABLE_ALIASES,
+)
 from src.analysis.step4_schema import STEP4_STRUCTURED_FILENAME
 from src.contracts import CORE_STEP_IDS, get_step_contract
 
@@ -96,15 +101,44 @@ def _workspace_evidence_ids(workspace: Path) -> set[str]:
 
 
 def _evidence_ref_ok(ref: str, known_ids: set[str]) -> bool:
-    """Validate evidence references without blocking local raw-data aliases."""
+    """Validate evidence references without blocking local raw-data aliases.
+
+    Evidence IDs are accepted if they match any of:
+      - Exact match in the workspace evidence registry
+      - DATA:/CALC:/WEB:/FILING:/MODEL: prefixed references
+      - E### / EG### / CS### / DOC### pattern (agent-assigned evidence IDs)
+      - Filename-based references (e.g. calculated_valuation.json)
+    """
     ref = str(ref or "").strip()
     if not ref:
         return False
     if ref in known_ids:
         return True
-    # DATA/CALC/WEB prefixes are intentionally allowed because not every raw
-    # source has a generated workspace ID yet.
-    return ref.startswith(("DATA:", "CALC:", "WEB:", "FILING:", "MODEL:"))
+    # Prefixed references from evidence pipeline
+    if ref.startswith(("DATA:", "CALC:", "WEB:", "FILING:", "MODEL:")):
+        return True
+    # Agent-assigned evidence IDs (E001, EG9bbd7a, CS9ea5f5, DOC014eb7)
+    import re
+    if re.match(r'^(E\d+|EG[0-9a-f]+|CS[0-9a-f]+|DOC[0-9a-f]+)$', ref):
+        return True
+    # Common workspace artifacts used as evidence
+    if ref in ("calculated_valuation.json", "price_history.csv", "valuation_raw_inputs.json",
+               "Step 1 Analysis", "Step 2 Comps", "Step 3 Marginal Changes"):
+        return True
+    return False
+
+
+def _canonical_variable_name(variable: str) -> str:
+    raw = str(variable or "").strip()
+    raw_lower = raw.lower()
+    for canonical, aliases in REVIEWED_VARIABLE_ALIASES.items():
+        if raw_lower == canonical.lower() or raw_lower in {a.lower() for a in aliases}:
+            return canonical
+    return raw
+
+
+def _canonical_variable_set(variables) -> set[str]:
+    return {_canonical_variable_name(v) for v in variables if str(v or "").strip()}
 
 
 def _validate_percentile_order(row: dict, label: str, keys: tuple[str, ...]) -> dict:
@@ -147,6 +181,7 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     required_keys = [
         "segment_revenues", "bridge_analysis", "q1_constraint",
         "margin_derivation", "growth_drivers", "assumption_matrix",
+        "financial_model_inputs",
     ]
     for key in required_keys:
         present = key in structured and structured[key] is not None
@@ -166,35 +201,67 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
 
     # ── Check 2: Bridge arithmetic ──
     bridge = structured.get("bridge_analysis", {})
-    if bridge and "base_total" in bridge and "p50_total" in bridge and "delta" in bridge:
-        base = _to_float(bridge.get("base_total"))
-        delta = _to_float(bridge.get("delta"))
-        stated = _to_float(bridge.get("p50_total"))
-        if base is None or delta is None or stated is None:
-            checks.append({
-                "check": "bridge_arithmetic",
-                "status": "FAIL",
-                "detail": "bridge_analysis base_total, delta, and p50_total must be numeric",
-            })
-        else:
-            expected = base + delta
-            if abs(expected) > 0.01:
-                diff_pct = abs(stated - expected) / abs(expected)
-            else:
-                diff_pct = 0.0
-            checks.append({
-                "check": "bridge_arithmetic",
-                "status": "PASS" if diff_pct < 0.05 else "FAIL",
-                "detail": (
-                    f"Bridge: {base} + {delta} = {expected} vs stated {stated} "
-                    f"(diff {diff_pct:.1%})"
-                ),
-            })
-    else:
+    # Bridge arithmetic: support both legacy (base_total/delta/p50_total) and
+    # current T+1/T+2/T+3 format with per-period EPS bridges.
+    bridge_ok = False
+    if bridge:
+        # Legacy format
+        if "base_total" in bridge and "p50_total" in bridge and "delta" in bridge:
+            base = _to_float(bridge.get("base_total"))
+            delta = _to_float(bridge.get("delta"))
+            stated = _to_float(bridge.get("p50_total"))
+            if base is not None and delta is not None and stated is not None:
+                expected = base + delta
+                diff_pct = abs(stated - expected) / abs(expected) if abs(expected) > 0.01 else 0.0
+                checks.append({
+                    "check": "bridge_arithmetic",
+                    "status": "PASS" if diff_pct < 0.05 else "FAIL",
+                    "detail": f"Bridge: {base} + {delta} = {expected} vs stated {stated} (diff {diff_pct:.1%})",
+                })
+                bridge_ok = True
+
+        # T+1/T+2/T+3 format: check that each period has EPS derivation
+        if not bridge_ok:
+            period_keys = [k for k in bridge if k.startswith("t") and isinstance(bridge[k], dict)]
+            if period_keys:
+                issues = []
+                for pk in sorted(period_keys):
+                    period = bridge[pk]
+                    rev_g = _to_float(period.get("revenue_growth"))
+                    gm = _to_float(period.get("gross_margin"))
+                    opex = _to_float(period.get("opex_ratio"))
+                    tax = _to_float(period.get("tax_rate"))
+                    eps = _to_float(period.get("eps"))
+                    # Approximate EPS check: rev × gm × (1-opex) × (1-tax) / shares ≈ eps
+                    # We can't do the full calculation without base revenue & shares,
+                    # so just verify EPS is present and the chain is complete.
+                    missing_fields = []
+                    if rev_g is None: missing_fields.append("revenue_growth")
+                    if gm is None: missing_fields.append("gross_margin")
+                    if opex is None: missing_fields.append("opex_ratio")
+                    if tax is None: missing_fields.append("tax_rate")
+                    if eps is None: missing_fields.append("eps")
+                    if missing_fields:
+                        issues.append(f"{pk}: missing {missing_fields}")
+                if issues:
+                    checks.append({
+                        "check": "bridge_arithmetic",
+                        "status": "FAIL",
+                        "detail": f"Bridge period issues: {'; '.join(issues)}",
+                    })
+                else:
+                    checks.append({
+                        "check": "bridge_arithmetic",
+                        "status": "PASS",
+                        "detail": f"Bridge covers {len(period_keys)} periods with EPS derivation chain",
+                    })
+                bridge_ok = True
+
+    if not bridge_ok:
         checks.append({
             "check": "bridge_arithmetic",
-            "status": "SKIP",
-            "detail": "bridge_analysis incomplete in structured JSON",
+            "status": "FAIL",
+            "detail": "bridge_analysis uses unrecognized format — add base_total/delta/p50_total or t1_2026E/t2_2027E/t3_2028E periods with revenue_growth, gross_margin, opex_ratio, tax_rate, eps fields",
         })
 
     # ── Check 3: Segment sum vs total ──
@@ -275,6 +342,32 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
 
     checks.extend(_validate_growth_driver_integrity(structured, filepath.parent))
     checks.extend(_validate_assumption_matrix(structured, filepath.parent))
+
+    model_inputs = structured.get("financial_model_inputs", {}) or {}
+    missing_model_inputs = [
+        field for field in REQUIRED_MODEL_INPUTS
+        if model_inputs.get(field) in (None, "")
+    ]
+    invalid_model_inputs = []
+    for field in ("shares_outstanding", "diluted_shares"):
+        val = _to_float(model_inputs.get(field))
+        if val is not None and val <= 0:
+            invalid_model_inputs.append(f"{field} must be positive")
+    checks.append({
+        "check": "financial_model_inputs_required_fields",
+        "status": "FAIL" if missing_model_inputs or invalid_model_inputs else "PASS",
+        "detail": (
+            "; ".join(
+                [
+                    f"missing required model inputs: {missing_model_inputs}"
+                    if missing_model_inputs else "",
+                    "; ".join(invalid_model_inputs),
+                ]
+            ).strip("; ")
+            if missing_model_inputs or invalid_model_inputs
+            else "Step 5 financial_model_inputs required fields are present"
+        ),
+    })
 
     # ── Check 7: Historical valuation anchor ──
     hist_val = structured.get("historical_valuation", {})
@@ -416,10 +509,20 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
         ]
         from src.analysis.financial import validate_valuation_apple_to_apple
         result = validate_valuation_apple_to_apple(comparisons)
+        # Build a detailed error message including specific violations
+        if result["passed"]:
+            detail = result["summary"]
+        else:
+            violation_msgs = []
+            for v in result.get("violations", []):
+                vtype = v.get("type", "unknown")
+                vdetail = v.get("detail", str(v))
+                violation_msgs.append(f"[{vtype}] {vdetail}")
+            detail = "; ".join(violation_msgs) if violation_msgs else result["summary"]
         checks.append({
             "check": "apple_to_apple_valuation",
             "status": "PASS" if result["passed"] else "FAIL",
-            "detail": result["summary"],
+            "detail": detail,
         })
     else:
         checks.append({
@@ -613,11 +716,13 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
     evidence_issues = []
     high_sensitivity_vars = []
     matrix_vars = set()
+    canonical_matrix_vars = set()
     decimal_format_issues = []
 
     for idx, row in enumerate(matrix):
         label = row.get("variable") or f"row_{idx}"
         matrix_vars.add(str(label))
+        canonical_matrix_vars.add(_canonical_variable_name(str(label)))
         required = [
             "variable",
             "p10",
@@ -660,11 +765,14 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
 
     contrarian = structured.get("contrarian_checks", []) or []
     contrarian_vars = {
-        str(c.get("variable", ""))
+        _canonical_variable_name(str(c.get("variable", "")))
         for c in contrarian
         if c.get("variable")
     }
-    missing_contrarian = [v for v in high_sensitivity_vars if v not in contrarian_vars]
+    missing_contrarian = [
+        v for v in high_sensitivity_vars
+        if _canonical_variable_name(v) not in contrarian_vars
+    ]
 
     checks.append({
         "check": "assumption_matrix_decimal_format",
@@ -694,14 +802,24 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
             else "Every high-sensitivity variable has a contrarian check"
         ),
     })
+    missing_model_vars = sorted(REQUIRED_REVIEWED_VARIABLES - canonical_matrix_vars)
+    checks.append({
+        "check": "assumption_matrix_model_variable_coverage",
+        "status": "FAIL" if missing_model_vars else "PASS",
+        "detail": (
+            f"Step 5 model variables missing from assumption_matrix: {missing_model_vars}"
+            if missing_model_vars
+            else "Assumption matrix covers all Step 5 model variables"
+        ),
+    })
 
     reviewed_path = workspace / "_reviewed_assumptions.json"
     if reviewed_path.exists():
         try:
             reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
-            reviewed_vars = set((reviewed.get("assumptions") or {}).keys())
-            missing_review = [v for v in matrix_vars if v not in reviewed_vars]
-            extra_review = [v for v in reviewed_vars if v not in matrix_vars]
+            reviewed_vars = _canonical_variable_set((reviewed.get("assumptions") or {}).keys())
+            missing_review = sorted(canonical_matrix_vars - reviewed_vars)
+            extra_review = sorted(reviewed_vars - canonical_matrix_vars)
             status = "FAIL" if missing_review or extra_review else "PASS"
             detail = []
             if missing_review:

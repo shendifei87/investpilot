@@ -682,10 +682,12 @@ _IMAGE_STEP_MAP = {
     'monte_carlo_distribution.png': 'step6',
     'monte_carlo_distribution_corrected.png': 'step6',
     'monte_carlo_distribution_v3.png': 'step6',
+    'monte_carlo_distributions.png': 'step6',
     'forward_pe_band.png': 'step6',
     'eps_distribution.png': 'step6',
     'eps_pe_scatter.png': 'step6',
     'revenue_driver_bridge.png': 'step4',
+    'revenue_bridge.png': 'step4',
     'target_price_distribution.png': 'step6',
 }
 
@@ -768,6 +770,192 @@ def _auto_embed_workspace_images(ws: Path, sections_html: str) -> str:
             sections_html += appendix_section
 
     return sections_html
+
+
+# ---------------------------------------------------------------------------
+# Auto-generated 1-Page Summary (Markdown)
+# ---------------------------------------------------------------------------
+
+def _extract_conclusion(text: str, max_len: int = 200) -> str:
+    """Extract the strongest one-sentence conclusion from a step markdown file."""
+    # Priority 1: Explicit "**Conclusion**:" line (not too long)
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('**Conclusion**') or stripped.startswith('**核心结论**'):
+            content = stripped.split('：', 1)[-1].split(':', 1)[-1].strip().lstrip('*').strip()
+            if 15 < len(content) < max_len:
+                return content
+
+    # Priority 2: "**Decision**:" line
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('**Decision:'):
+            content = stripped.replace('**Decision:', '').strip().lstrip('*').strip()
+            if 5 < len(content) < max_len:
+                return content
+
+    # Priority 3: "**Rating**:" line
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('**Rating**'):
+            content = stripped.split(':', 1)[-1].strip().lstrip('*').strip()
+            if 5 < len(content) < max_len:
+                return content
+
+    # Priority 4: First bold sentence that looks like a key finding
+    for line in text.split('\n'):
+        stripped = line.strip()
+        m = re.match(r'\*\*(.+?)\*\*[:：]\s*(.+)$', stripped)
+        if m:
+            key = m.group(1).strip()
+            val = m.group(2).strip()
+            # Skip meta keys, keep finding keys
+            if key.lower() not in ('note', 'source', 'see', 'date', 'example', 'usage'):
+                combined = f"{key}: {val}"
+                if 10 < len(combined) < max_len:
+                    return combined
+
+    return ''
+
+
+def _extract_metrics(text: str) -> dict:
+    """Extract key metrics from step files (table rows with numbers)."""
+    metrics = {}
+    # Look for common metric patterns in tables
+    for line in text.split('\n'):
+        # Match table rows like "| EPS | 12.0 | ..." or "| **EPS** | **12.0** |"
+        m = re.match(r'\|\s*\*{0,2}(EPS|PE|毛利率|Gross Margin|P50 Target|Revenue Growth|净利|营收增速|RRR|ROE|目标价)\*{0,2}\s*\|\s*\*{0,2}([0-9.]+[%x]?)\*{0,2}', line)
+        if m:
+            metrics[m.group(1).strip('*')] = m.group(2).strip('*')
+    return metrics
+
+
+def generate_summary_md(workspace_dir, ticker: str, company_name: str = "", lang: str = "zh") -> Path:
+    """Auto-generate a compact 1-page summary MD from step files + structured data.
+
+    Args:
+        lang: 'zh' (default, Chinese) or 'en' (English).
+    """
+    from datetime import datetime
+
+    ws = Path(workspace_dir)
+    date_str = datetime.now().strftime('%Y%m%d')
+    is_zh = (lang == 'zh')
+
+    # ── Language dictionaries ──
+    if is_zh:
+        TITLE = "一页研报摘要"
+        FRAMEWORK = "InvestPilot 深度研究"
+        TRIAGE = "筛选"
+        STEP_TITLES = {1:"业务深研",2:"护城河",3:"预期差",4:"假设矩阵",5:"财务模型",
+                       6:"蒙特卡洛",7:"赔率与策略",8:"审计",9:"投委会决策"}
+        PE_LABEL = "PE TTM"
+        EPS_LABEL = "EPS P50"
+        TARGET_LABEL = "目标价"
+        WIN_LABEL = "胜率"
+        MED_LABEL = "中位回报"
+        CHARTS_LABEL = "图表与详情"
+        HKD = "港元"
+        RMB = "元"
+    else:
+        TITLE = "1-Page Research Summary"
+        FRAMEWORK = "InvestPilot Deep Research"
+        TRIAGE = "Triage"
+        STEP_TITLES = {1:"Business",2:"Moat",3:"Catalyst",4:"Assumptions",5:"Model",
+                       6:"Monte Carlo",7:"RRR",8:"Audit",9:"Decision"}
+        PE_LABEL = "PE TTM"
+        EPS_LABEL = "EPS P50"
+        TARGET_LABEL = "Target"
+        WIN_LABEL = "Win"
+        MED_LABEL = "Med R"
+        CHARTS_LABEL = "Charts & details"
+        HKD = "HKD"
+        RMB = "RMB"
+
+    # Load structured data
+    mc_stats = {}
+    if (ws / 'monte_carlo_stats.json').exists():
+        try: mc_stats = json.loads((ws / 'monte_carlo_stats.json').read_text(encoding='utf-8'))
+        except: pass
+    calc_val = {}
+    if (ws / 'calculated_valuation.json').exists():
+        try: calc_val = json.loads((ws / 'calculated_valuation.json').read_text(encoding='utf-8'))
+        except: pass
+
+    # Find canonical step files
+    step_files = sorted(ws.glob("step*_*.md"))
+    canonical = {}
+    for sf in step_files:
+        if any(x in sf.name for x in ('_blockers', '_guard_', '_structured', 'step4_quantitative')):
+            continue
+        m = re.match(r'step(\d+)_', sf.name)
+        if m and 0 <= int(m.group(1)) <= 9:
+            canonical[int(m.group(1))] = sf
+
+    # Company name from step1 title
+    if not company_name and 1 in canonical:
+        first_line = canonical[1].read_text(encoding='utf-8').split('\n')[0]
+        m = re.search(r'\((.+?)\)', first_line)
+        if m:
+            cn = m.group(1).strip().split('/')[0].strip()
+            if cn and len(cn) > 1:
+                company_name = cn
+    if not company_name:
+        company_name = ticker
+
+    display_name = company_name.replace(f"({ticker})", "").replace(ticker, "").strip().rstrip('()')
+
+    # ── Build ──
+    pe_val = ''
+    pe_ttm = calc_val.get('pe_trailing', {})
+    if isinstance(pe_ttm, dict): pe_val = pe_ttm.get('value', '')
+    eps_p50 = mc_stats.get('eps_p50', '')
+    tp_hkd = mc_stats.get('target_p50_hkd', '')
+    prob_pos = mc_stats.get('prob_positive', '')
+    med_ret = mc_stats.get('median_return_pct', '')
+
+    lines = [f"# {display_name} ({ticker}) — {TITLE}",
+             f"**{datetime.now().strftime('%Y-%m-%d')}** | {FRAMEWORK}", ""]
+
+    # Metric bar
+    parts = []
+    if pe_val: parts.append(f"{PE_LABEL}: {pe_val}x")
+    if eps_p50: parts.append(f"{EPS_LABEL}: {eps_p50} {RMB}")
+    if tp_hkd: parts.append(f"{TARGET_LABEL}: {tp_hkd} {HKD}")
+    if prob_pos: parts.append(f"{WIN_LABEL}: {prob_pos}%")
+    if med_ret: parts.append(f"{MED_LABEL}: +{med_ret}%")
+    if parts: lines.append("| " + " | ".join(parts) + " |\n")
+
+    lines.append("---\n")
+
+    # Step 0
+    if 0 in canonical:
+        text = canonical[0].read_text(encoding='utf-8')
+        for ln in text.split('\n'):
+            if ln.strip().startswith('**Decision:'):
+                d = ln.strip().replace('**Decision:', '').strip().lstrip('*').strip()
+                lines.append(f"**{TRIAGE}**: {d}")
+                break
+
+    # Steps 1-9
+    for sn in range(1, 10):
+        if sn not in canonical: continue
+        text = canonical[sn].read_text(encoding='utf-8')
+        f = _extract_conclusion(text)
+        if not f:
+            for ln in text.split('\n')[:50]:
+                m = re.match(r'\*\*(EPS|Target|PE|RRR|Revenue|概率|仓位|Rating|毛利率|ROE|Moat)\s*(?:P\d{2})?\*{0,2}\s*:\s*\*{0,2}(.+?)\*{0,2}$', ln.strip())
+                if m:
+                    f = f"{m.group(1).strip('*')}: {m.group(2).strip('*')}"; break
+        if f:
+            if len(f) > 120: f = f[:117] + '...'
+            lines.append(f"- **{STEP_TITLES.get(sn, f'S{sn}')}**: {f}")
+
+    lines += ["", "---", f"*{CHARTS_LABEL}: [{ticker}_report_{date_str}.html]({ticker}_report_{date_str}.html)*"]
+
+    output_path = ws / f"{ticker}_summary_{date_str}.md"
+    output_path.write_text('\n'.join(lines), encoding='utf-8')
+    return output_path
 
 
 # ---------------------------------------------------------------------------

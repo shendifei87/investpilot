@@ -42,36 +42,28 @@ materials.index_workspace_files()
 
 ### PDF Read Failure Guard
 
-Annual/interim report MD&A is mandatory. If a local PDF cannot be read because
-of encoding, OCR, corrupted text, or Chinese character parsing issues, do not
-keep retrying the same PDF.
+Annual/interim report MD&A is mandatory. **For HK and US stocks, Chinese-language PDFs (especially annual reports) are almost always scanned images — text extraction will fail.** Do not spend time retrying.
 
-Rules:
-- Record every PDF read attempt:
-  ```bash
-  python -m src.cli materials {workspace_dir} read-attempt \
-    --document annual_report.pdf \
-    --status encoding_error \
-    --error "Chinese text extraction failed" \
-    --max-attempts 2
-  ```
-- After 2 failed attempts, stop local PDF parsing and use WebSearch to find the
-  company's official IR page, exchange filing page, or regulator filing page
-  containing the **complete annual/interim report**.
-- News articles, press releases, media summaries, data-vendor summaries, and
-  broker-report excerpts are not valid substitutes for the annual/interim
-  report.
-- Record the fallback source before continuing:
-  ```bash
-  python -m src.cli materials {workspace_dir} web-fallback \
-    --document annual_report.pdf \
-    --url "https://..." \
-    --source-kind company_ir \
-    --complete-report
-  ```
-- Then read the MD&A / management discussion section from that complete report
-  and record an explicit MD&A extraction. Do not proceed with Step 1 unless
-  MD&A has been read and cited.
+**Standard fallback for HK/US stocks (use immediately, do not wait for 2 PDF failures):**
+
+1. **First attempt**: Try reading the PDF with the Read tool (1-2 pages only)
+2. **If image/scanned**: Stop immediately. Record the attempt via material tracker, then use WebSearch as the standard path:
+   - Search for `"{公司名} {年份}年报 管理层讨论 业务回顾 营收 净利润 毛利率"` (Chinese reports)
+   - Search for `"{Company} annual report {year} MD&A revenue segment"` (English reports)  
+   - Aggregate data from: company IR page summaries, broker research reports, financial news sites
+3. **Record the web fallback** using the material tracker CLI (so the audit trail is preserved):
+   ```bash
+   python -m src.cli materials {workspace_dir} web-fallback \
+     --document annual_report.pdf \
+     --url "https://..." \
+     --source-kind web_search \
+     --complete-report
+   ```
+4. **Proceed with the analysis** using WebSearch-derived data + broker report data + AKShare/API financial data. Do NOT block Step 1 because a PDF can't be read.
+
+**Rules for A-share stocks only:**
+- Same as above, but Tushare `income`/`balancesheet`/`cashflow` APIs are available as primary financial data sources
+- PDF reading is supplementary, not mandatory
 
 For every annual/interim report and broker report that materially informs the analysis, record typed extractions into `material_extracts.json`:
 

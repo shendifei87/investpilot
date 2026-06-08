@@ -61,6 +61,26 @@ REQUIRED_REVIEWED_VARIABLES = {
     "pe",
 }
 
+# Alias mapping allows Step 4 to use either naming convention.
+# The _reviewed_assumptions.json can use the canonical names or the aliases;
+# the model builder resolves both.
+REVIEWED_VARIABLE_ALIASES = {
+    "rev_growth": ["rev_growth", "total_revenue_growth", "revenue_growth_total"],
+    "gross_margin": ["gross_margin"],
+    "opex_ratio": ["opex_ratio"],
+    "tax_rate": ["tax_rate"],
+    "pe": ["pe", "pe_forward"],
+}
+
+
+def _canonical_reviewed_variables(assumptions: dict) -> set[str]:
+    """Return reviewed variables normalized to the model's canonical names."""
+    reviewed_vars = set(str(k) for k in assumptions)
+    canonical_vars = set()
+    for canonical, aliases in REVIEWED_VARIABLE_ALIASES.items():
+        if any(alias in reviewed_vars for alias in aliases):
+            canonical_vars.add(canonical)
+    return reviewed_vars | canonical_vars
 
 
 
@@ -257,9 +277,11 @@ def _load_reviewed_assumptions(workspace: Path) -> dict:
     assumptions = reviewed.get("assumptions")
     if not isinstance(assumptions, dict) or not assumptions:
         raise ValueError("_reviewed_assumptions.json must contain a non-empty assumptions object")
-    missing = sorted(REQUIRED_REVIEWED_VARIABLES - set(assumptions))
+    covered = _canonical_reviewed_variables(assumptions)
+    missing = sorted(REQUIRED_REVIEWED_VARIABLES - covered)
     if missing:
-        raise ValueError(f"_reviewed_assumptions.json missing required reviewed variables: {missing}")
+        raise ValueError(f"_reviewed_assumptions.json missing required reviewed variables: {missing}. "
+                         f"Accepted names: canonical={list(REQUIRED_REVIEWED_VARIABLES)} or aliases={REVIEWED_VARIABLE_ALIASES}")
     return reviewed
 
 
@@ -689,7 +711,7 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         for r in all_rows
         if not r.get("lineage")
     ]
-    reviewed_vars = set((reviewed.get("assumptions") or {}).keys())
+    reviewed_vars = _canonical_reviewed_variables(reviewed.get("assumptions") or {})
     unreviewed = sorted(v for v in used_reviewed_variables if v not in reviewed_vars)
     checks.extend([
         {

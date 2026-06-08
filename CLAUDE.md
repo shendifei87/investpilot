@@ -100,13 +100,16 @@ When the user asks to revisit a previously researched stock with an existing `th
 
 | Market | Report Language | Primary Data Source | Supplement | Ticker Examples |
 |:-------|:----------------|:--------------------|:-----------|:----------------|
-| A-share | Chinese | Tushare Pro (2000 pts) | AKShare | `600519`, `000001.SZ` |
-| Hong Kong | Chinese | AKShare (East Money) | Tushare `moneyflow_hsgt`/`hk_hold` | `0700.HK`, `9988.HK` |
-| US | English | AKShare (price only) + WebSearch/SEC EDGAR | financial-analysis skills | `AAPL`, `TSLA` |
+| A-share | Chinese | Tushare Pro (2000 pts) | AKShare, WebSearch | `600519`, `000001.SZ` |
+| Hong Kong | Chinese | **AKShare (primary)** | Tushare `moneyflow_hsgt`/`hk_hold`, WebSearch | `0700.HK`, `9988.HK` |
+| US | English | AKShare (price+macro) + WebSearch/SEC EDGAR | financial-analysis skills | `AAPL`, `TSLA` |
 
-**HK/US data strategy** (Tushare HK/US modules not purchased):
-- **HK**: AKShare provides daily prices, financial statements (`stock_hk_finance`), industry comparisons (valuation/growth/scale), AH premium data. Tushare `moneyflow_hsgt`/`hk_hold` still available for southbound capital flow.
-- **US**: AKShare provides daily prices + 40+ macro indicators (`macro_usa_*`). Financial statements/indicators require WebSearch + SEC EDGAR + `financial-analysis` skills (dcf-model, comps-analysis can fetch SEC EDGAR data).
+**HK data strategy** (AKShare primary — Tushare HK modules not purchased):
+- **AKShare is the PRIMARY source** for HK stocks: `stock_hk_daily` (prices), `stock_hk_financial_indicator_em` (EPS/BPS/ROE/market cap/shares), `stock_hk_company_profile_em` (company info), `stock_hk_valuation_comparison_em` (peer comparison)
+- Tushare `hk_basic`/`hk_daily`/`hk_fina_indicator` used as supplement only when AKShare fails
+- Tushare `moneyflow_hsgt`/`hk_hold` still available for southbound capital flow
+- HK annual report PDFs are almost always scanned images — **WebSearch is the standard path** for MD&A extraction; do not waste time retrying PDF reads
+- `python -m src.cli step4-template` prints a valid Step 4 JSON skeleton
 
 ## Valuation Framework
 
@@ -218,7 +221,7 @@ Each step's prompt file (`prompts/NN_*.md`) contains a `## MCP 实时数据管�
 **Market data**: `daily`, `stk_limit`, `top_list`, `top_inst`
 
 **HK/US**: ~~Tushare hk_*/us_* APIs not purchased~~ → Use AKShare instead:
-- HK: `stock_hk_daily_em()`, `stock_hk_finance()`, `stock_hk_valuation_comparison_em()`, `stock_zh_ah_spot()`, `stock_hsgt_*()`
+- HK: `stock_hk_daily()`, `stock_hk_financial_indicator_em()`, `stock_hk_valuation_comparison_em()`, `stock_hk_growth_comparison_em()`, `stock_hk_company_profile_em()`. Tushare `moneyflow_hsgt`/`hk_hold` for southbound flow.
 - US: `stock_us_daily()`, `stock_us_spot_em()`, `macro_usa_*()` (40+ indicators)
 - US financials: WebSearch + SEC EDGAR + `financial-analysis` skills
 

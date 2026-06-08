@@ -408,7 +408,7 @@ def cmd_knowledge(args):
 
 
 def cmd_report(args):
-    from src.report.generator import generate_report_html
+    from src.report.generator import generate_report_html, generate_summary_md
 
     ws_path = _resolve_workspace(args.workspace)
 
@@ -422,12 +422,33 @@ def cmd_report(args):
     ticker = ticker.rstrip("/\\")
     company_name = args.name or ""
 
+    lang = getattr(args, 'lang', 'zh') or 'zh'
+
+    # ── Generate auto-summary MD ──
+    if not getattr(args, 'no_summary', False):
+        summary_path = generate_summary_md(
+            workspace_dir=str(ws_path),
+            ticker=ticker,
+            company_name=company_name,
+            lang=lang,
+        )
+        print(f"Summary generated: {summary_path}")
+
+    # ── Generate full HTML ──
     output = generate_report_html(
         workspace_dir=str(ws_path),
         ticker=ticker,
         company_name=company_name,
     )
     print(f"HTML report generated: {output}")
+
+
+def cmd_step4_template(args):
+    """Print a minimal valid Step 4 structured assumptions JSON template."""
+    import json
+    from src.analysis.step4_schema import generate_step4_template
+    template = generate_step4_template()
+    print(json.dumps(template, ensure_ascii=False, indent=2))
 
 
 def cmd_validate_step4(args):
@@ -493,7 +514,7 @@ def cmd_excel_model(args):
 
     ws_path = _resolve_workspace(args.workspace)
 
-    output_path = generate_excel_model(workspace, ticker=args.ticker or "")
+    output_path = generate_excel_model(ws_path, ticker=args.ticker or "")
     print(json.dumps({
         "excel_path": str(output_path),
     }, ensure_ascii=False, indent=2))
@@ -842,13 +863,21 @@ def main():
     p_knowledge.set_defaults(func=cmd_knowledge)
 
     # ── Report commands ─────────────────────────────
-    p_report = subparsers.add_parser("report", help="Generate HTML research report")
+    p_report = subparsers.add_parser("report", help="Generate HTML research report + auto-summary MD")
     p_report.add_argument("workspace", help="Workspace directory name (e.g. 09992.HK)")
     p_report.add_argument("--ticker", "-t", help="Ticker symbol (default: workspace name)")
     p_report.add_argument("--name", "-n", help="Company display name")
+    p_report.add_argument("--lang", choices=["zh", "en"], default="zh", help="Report language (default: zh)")
+    p_report.add_argument("--no-summary", action="store_true", help="Skip auto-summary MD generation")
     p_report.set_defaults(func=cmd_report)
 
     # ── Step validation commands ────────────────────
+    p_step4_template = subparsers.add_parser(
+        "step4-template",
+        help="Print a minimal valid Step 4 structured assumptions JSON template",
+    )
+    p_step4_template.set_defaults(func=cmd_step4_template)
+
     p_validate_step4 = subparsers.add_parser(
         "validate-step4",
         help="Validate Step 4 structured assumptions before Monte Carlo",

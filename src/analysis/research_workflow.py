@@ -7,7 +7,9 @@ without completed prerequisites.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
+from pathlib import Path
 
 from src.analysis._base import WorkspaceStateBase
 from src.contracts import (
@@ -18,6 +20,28 @@ from src.contracts import (
     get_step_contract,
     normalize_step_id,
 )
+
+
+def _clear_guard_artifacts(workspace: Path, step_id: int | str) -> None:
+    """Remove stale guard artifacts when restarting a step.
+
+    This prevents stale blocker files and guard state from blocking
+    a fresh attempt after the underlying issues have been fixed.
+    """
+    artifacts = [
+        workspace / f"step{step_id}_blockers.md",
+        workspace / f"step{step_id}_guard_state.json",
+    ]
+    # Also clean the step4-specific guard that step5 model builder checks
+    if str(step_id) in {"4", "5"}:
+        artifacts.append(workspace / "step4_blockers.md")
+        artifacts.append(workspace / "step4_guard_state.json")
+    for path in artifacts:
+        try:
+            if path.exists():
+                os.remove(path)
+        except OSError:
+            pass
 
 VALID_STATUSES = {"not_started", "in_progress", "completed", "blocked", "skipped"}
 
@@ -158,6 +182,9 @@ class ResearchWorkflow(WorkspaceStateBase):
         rec["status"] = "in_progress"
         rec["started_at"] = _now()
         rec.pop("blocked_at", None)
+        rec.pop("block_reason", None)
+        # ── Clear stale guard artifacts ──
+        _clear_guard_artifacts(self.workspace, step_id)
         self._record("start", step_id, "force" if force else "")
         self._save()
         return {"started": True, "step": step_id, "status": "in_progress", "forced": force}

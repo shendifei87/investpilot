@@ -106,6 +106,19 @@ class TestResearchWorkflow:
         assert wf.can_start("5")["allowed"] is True
         assert wf.can_start("6")["allowed"] is False
 
+    def test_start_step5_clears_stale_step4_guard_artifacts(self, tmp_path):
+        wf, ws = _workflow(tmp_path)
+        for n in ("1", "2", "3", "4"):
+            _write_required_artifacts(ws, n)
+        (ws / "step4_guard_state.json").write_text("{}", encoding="utf-8")
+        (ws / "step4_blockers.md").write_text("# stale blocker\n", encoding="utf-8")
+        wf.sync_from_files()
+
+        assert wf.start_step("5")["started"] is True
+
+        assert not (ws / "step4_guard_state.json").exists()
+        assert not (ws / "step4_blockers.md").exists()
+
     def test_step_7_requires_4_5_6(self, tmp_path):
         """Step 7 (RRR) cannot start until Steps 4, 5, 6 are all done."""
         wf, ws = _workflow(tmp_path)

@@ -120,6 +120,8 @@ Allowed decomposition methods include:
 
 Direct total-growth guessing is a hard error.
 
+**⚠️ Step 5 requires T+2 and T+3 growth per segment**: For every growth driver in `growth_drivers`, fill in `growth_T+1`, `growth_T+2`, and `growth_T+3` fields. The financial model builder (`build_financial_model`) needs these to project the three-year forecast. Missing T+2/T+3 data will block model generation even if Step 4 validation passes.
+
 ### 3. Margin And Cost Derivation
 
 Gross margin and operating margin must be derived from cost structure:
@@ -202,12 +204,12 @@ from src.analysis.step4_schema import save_structured_assumptions
 save_structured_assumptions(workspace_dir, assumptions_dict)
 ```
 
-The JSON must include the required fields validated by `validate-step4`, including:
+The JSON must include the required fields validated by `validate-step4`. **Run `python -m src.cli step4-template` to get a complete valid JSON skeleton** — fill in the values, do not guess the format. Required keys include:
 
-- `segment_revenues`
-- `growth_drivers`
-- `assumption_matrix`
-- `bridge_analysis`
+- `segment_revenues` (list of objects with name, base_revenue, p50_growth, p50_revenue)
+- `growth_drivers` (list of {segment, drivers[]} — 2-4 drivers per segment with contribution_pct that sums to p50_growth)
+- `assumption_matrix` (list of objects — percentage values in DECIMAL: 0.20 = 20%)
+- `bridge_analysis` (dict with t1_2026E/t2_2027E/t3_2028E keys, each containing revenue_growth, gross_margin, opex_ratio, tax_rate, eps, pe_forward, target_price_rmb)
 - `q1_constraint`
 - `margin_derivation`
 - `historical_valuation`

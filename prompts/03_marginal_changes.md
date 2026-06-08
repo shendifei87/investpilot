@@ -297,5 +297,5 @@ After completing the expectation gap identification, answer these two core quest
 3. **调用顺序**：Phase 1（共识）→ Phase 2（资金流）→ Phase 3（新闻）→ Phase 4（公司行为）→ Phase 5（深度研究）
 4. **市场适配**：
    - **A 股**：可使用全部 MCP API（2000 积分范围内）
-   - **港股**：Tushare HK 模块未购买，使用 AKShare 替代。`stock_hk_daily_em(symbol)` 获取行情，`stock_hk_finance(symbol, indicator="按报告期")` 获取财务报表（利润表/资产负债表/现金流量表），`stock_hk_valuation_comparison_em(symbol)` 获取同业估值对比。Tushare `moneyflow_hsgt`/`hk_hold` 仍可用于南向资金。
+   - **港股**：Tushare HK 模块未购买，使用 AKShare 替代。`stock_hk_daily(symbol, adjust="qfq")` 获取行情，`stock_hk_financial_indicator_em(symbol)` 获取财务指标（EPS/BPS/ROE/市值/股本），`stock_hk_valuation_comparison_em(symbol)` 获取同业估值对比。Tushare `moneyflow_hsgt`/`hk_hold` 仍可用于南向资金。
    - **美股**：Tushare US 模块未购买，使用 AKShare `stock_us_daily(symbol)` 获取行情，`macro_usa_*()` 获取宏观指标。财务报表需通过 WebSearch + SEC EDGAR + `financial-analysis` skills 获取。

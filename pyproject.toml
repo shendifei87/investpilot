@@ -9,6 +9,7 @@ description = "Deep fundamental investment research harness powered by Claude Co
 requires-python = ">=3.9"
 dependencies = [
     "tushare>=1.4",
+    "akshare>=1.16",
     "pandas>=2.0",
     "numpy>=1.24",
     "scipy>=1.10",

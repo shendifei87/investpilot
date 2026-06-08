@@ -10,7 +10,7 @@ A deep fundamental investment research harness built on Claude Code. Seeks signi
 - **Step 4 Structured Assumptions + Validation** — Pre-flight 15-check validator with guard state, retry limits, and blocker escalation before Monte Carlo simulation
 - **Probabilistic Simulation** — t-Copula dependency structure + Kelly criterion position sizing + assumption consistency verification
 - **Forward PE Band** — Point-in-time vs constant-EPS proxy distinction with 5-year historical percentile bands
-- **Multi-Market Support** — A-share, Hong Kong, US stocks (data source: Tushare Pro)
+- **Multi-Market Support** — A-share (Tushare Pro), Hong Kong (AKShare), and US stocks (AKShare + SEC EDGAR)
 - **Expectation Gap Driven** — 4-dimension Edge classification scoring + catalyst time-decay tracking
 - **Knowledge Graph** — Cross-stock research experience accumulation and pattern matching
 - **PDF Read Failure Guard** — Material coverage validation with web fallback; rejects news/summaries as annual report substitutes
@@ -30,7 +30,7 @@ cd web && npm install
 Or install dependencies manually:
 
 ```bash
-pip install tushare pandas numpy scipy matplotlib requests tabulate pytest
+pip install tushare akshare pandas numpy scipy matplotlib requests tabulate pytest
 ```
 
 ## Configuration

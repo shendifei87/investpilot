@@ -721,6 +721,28 @@ class TestCmdModel:
         assert "Forecast model generation blocked" in out
 
 
+class TestCmdExcelModel:
+    def test_excel_model_passes_resolved_workspace_path(self, tmp_path, capsys):
+        root = tmp_path / "workspaces"
+        ws = root / "TEST"
+        ws.mkdir(parents=True)
+
+        args = MagicMock()
+        args.workspace = "TEST"
+        args.ticker = "TEST"
+
+        with patch("src.analysis._base.WORKSPACES_DIR", root), \
+             patch("src.analysis.excel_model.generate_excel_model") as mock_excel:
+            mock_excel.return_value = ws / "step5_3statement_model.xlsx"
+            from src.cli import cmd_excel_model
+            cmd_excel_model(args)
+
+        called_workspace = mock_excel.call_args.args[0]
+        assert called_workspace == ws
+        result = json.loads(capsys.readouterr().out)
+        assert result["excel_path"].endswith("step5_3statement_model.xlsx")
+
+
 class TestCmdWorkflow:
     def test_workflow_status_outputs_state(self, tmp_path, capsys):
         args = MagicMock()

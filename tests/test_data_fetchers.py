@@ -5,12 +5,15 @@ error handling, and normalization without requiring network access.
 """
 
 from unittest.mock import MagicMock, patch
+import sys
+import types
 
 import pandas as pd
 import pytest
 
 from src.data.ashare_fetcher import AshareFetcher
 from src.data.base import BaseTushareFetcher, FetchResult
+from src.data.us_fetcher import USFetcher
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +225,91 @@ class TestFetchResult:
         fr = FetchResult(data={"key": "val"}, source="tushare")
         assert fr.data == {"key": "val"}
         assert fr.source == "tushare"
+
+
+class _FakeResponse:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data
+
+
+def _sec_facts_fixture():
+    def usd(value, end="2025-12-31", form="10-K", fp="FY"):
+        return {"val": value, "end": end, "filed": "2026-02-01", "form": form, "fp": fp}
+
+    return {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {"shares": [usd(100.0, form="10-Q", fp="Q1")]}
+                }
+            },
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [usd(1000.0)]}
+                },
+                "NetIncomeLoss": {"units": {"USD": [usd(120.0)]}},
+                "EarningsPerShareDiluted": {"units": {"USD/shares": [usd(1.2)]}},
+                "Assets": {"units": {"USD": [usd(2000.0, form="10-Q", fp="Q1")]}},
+                "Liabilities": {"units": {"USD": [usd(500.0, form="10-Q", fp="Q1")]}},
+                "StockholdersEquity": {"units": {"USD": [usd(1500.0, form="10-Q", fp="Q1")]}},
+                "CashAndCashEquivalentsAtCarryingValue": {
+                    "units": {"USD": [usd(300.0, form="10-Q", fp="Q1")]}
+                },
+                "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [usd(200.0)]}},
+                "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [usd(50.0)]}},
+            },
+        }
+    }
+
+
+class TestUSFetcher:
+    def test_price_history_uses_akshare(self, monkeypatch):
+        fake_ak = types.SimpleNamespace()
+        fake_ak.stock_us_daily = lambda symbol, adjust="": pd.DataFrame({
+            "date": ["2025-01-01", "2026-01-01"],
+            "open": [90.0, 100.0],
+            "high": [91.0, 101.0],
+            "low": [89.0, 99.0],
+            "close": [90.5, 100.5],
+            "volume": [1000, 1200],
+        })
+        monkeypatch.setitem(sys.modules, "akshare", fake_ak)
+
+        result = USFetcher().fetch_price_history("AAPL", period="10y")
+
+        assert result.success is True
+        assert result.source == "akshare"
+        assert "trade_date" in result.data.columns
+        assert "close" in result.data.columns
+
+    def test_valuation_inputs_use_sec_edgar_raw_data(self, monkeypatch):
+        fake_ak = types.SimpleNamespace()
+        fake_ak.stock_us_daily = lambda symbol, adjust="": pd.DataFrame({
+            "date": ["2026-01-01"],
+            "close": [10.0],
+            "volume": [1000],
+        })
+        monkeypatch.setitem(sys.modules, "akshare", fake_ak)
+
+        def fake_get(url, headers=None, timeout=None):
+            if url.endswith("company_tickers.json"):
+                return _FakeResponse({"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}})
+            return _FakeResponse(_sec_facts_fixture())
+
+        monkeypatch.setattr("src.data.us_fetcher.requests.get", fake_get)
+
+        result = USFetcher().fetch_valuation_inputs("AAPL")
+
+        assert result.success is True
+        assert result.source == "akshare+sec_edgar"
+        assert result.data["current_price"] == 10.0
+        assert result.data["shares_outstanding"] == 100.0
+        assert result.data["eps_ttm"] == 1.2
+        assert result.data["book_value_per_share"] == 15.0
+        assert result.data["market_cap"] == 1000.0

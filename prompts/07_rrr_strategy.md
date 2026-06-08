@@ -169,5 +169,5 @@ If recommending waiting for a pullback entry, **RRR must be recalculated at the 
 
 1. 流动性数据辅助入场时机判断，不改变基本面 RRR 计算结果
 2. 市场适配：
-   - **港股**：使用 AKShare `stock_hk_daily_em(symbol)` 获取近 30 天成交量/成交额；`stock_hk_spot_em()` 获取实时行情。Tushare `moneyflow_hsgt` 仍可用于南向资金方向判断。
+   - **港股**：使用 AKShare `stock_hk_daily(symbol, adjust="qfq")` 获取行情及成交量/成交额；`stock_hk_financial_indicator_em(symbol)` 获取财务指标。Tushare `moneyflow_hsgt` 仍可用于南向资金方向判断。
    - **美股**：使用 AKShare `stock_us_daily(symbol)` 获取近 30 天成交量/成交额。资金流向需通过 WebSearch 从东方财富等获取。
