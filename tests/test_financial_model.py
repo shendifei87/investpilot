@@ -22,12 +22,32 @@ def _structured():
         ],
         "growth_drivers": [
             {"segment": "Cloud", "drivers": [
-                {"name": "volume", "contribution_pct": 0.15, "evidence_ids": ["DATA:usage"], "derivation": "Usage growth converts into cloud volume."},
-                {"name": "price", "contribution_pct": 0.05, "evidence_ids": ["DATA:pricing"], "derivation": "Mix upgrade supports price contribution."},
+                {
+                    "name": "volume", "contribution_pct": 0.15, "evidence_ids": ["DATA:usage"],
+                    "derivation": "Usage growth converts into cloud volume.",
+                    "base_value": 100, "unit": "units",
+                    "growth_2027E": 0.15, "growth_2028E": 0.10, "growth_2029E": 0.08,
+                },
+                {
+                    "name": "price", "contribution_pct": 0.05, "evidence_ids": ["DATA:pricing"],
+                    "derivation": "Mix upgrade supports price contribution.",
+                    "base_value": 1.0, "unit": "CNY/unit",
+                    "growth_2027E": 0.0434782609, "growth_2028E": 0.0454545455, "growth_2029E": 0.0370370370,
+                },
             ]},
             {"segment": "Ads", "drivers": [
-                {"name": "impressions", "contribution_pct": 0.06, "evidence_ids": ["DATA:traffic"], "derivation": "Traffic growth drives impressions."},
-                {"name": "load", "contribution_pct": 0.04, "evidence_ids": ["DATA:adload"], "derivation": "Ad load expansion contributes incremental revenue."},
+                {
+                    "name": "impressions", "contribution_pct": 0.06, "evidence_ids": ["DATA:traffic"],
+                    "derivation": "Traffic growth drives impressions.",
+                    "base_value": 1000, "unit": "impressions",
+                    "growth_2027E": 0.07, "growth_2028E": 0.06, "growth_2029E": 0.05,
+                },
+                {
+                    "name": "load", "contribution_pct": 0.04, "evidence_ids": ["DATA:adload"],
+                    "derivation": "Ad load expansion contributes incremental revenue.",
+                    "base_value": 0.20, "unit": "ad load",
+                    "growth_2027E": 0.0280373832, "growth_2028E": 0.0377358491, "growth_2029E": 0.0285714286,
+                },
             ]},
         ],
         "assumption_matrix": [
@@ -147,6 +167,7 @@ def _write_validation_sidecars(ws: Path):
         "pe_trailing": {"pe": 20.0, "valid": True},
         "pb": {"pb": 3.0, "valid": True},
         "ps": {"ps": 5.0, "valid": True},
+        "ev_ebitda": {"ev_ebitda": 12.0, "valid": True},
     }), encoding="utf-8")
     _write_reviewed_lock(ws)
 
@@ -291,12 +312,28 @@ class TestPctToDecimalConversion:
             },
             "growth_drivers": [
                 {"segment": "Widget", "drivers": [
-                    {"name": "volume", "contribution_pct": 15, "evidence_ids": ["DATA:v"]},
-                    {"name": "price", "contribution_pct": 7, "evidence_ids": ["DATA:p"]},
+                    {
+                        "name": "volume", "contribution_pct": 15, "evidence_ids": ["DATA:v"],
+                        "derivation": "Volume converts demand into units.", "base_value": 1000, "unit": "units",
+                        "growth_T+1": 15, "growth_T+2": 10, "growth_T+3": 6,
+                    },
+                    {
+                        "name": "price", "contribution_pct": 7, "evidence_ids": ["DATA:p"],
+                        "derivation": "Pricing/mix drives ASP.", "base_value": 10, "unit": "CNY/unit",
+                        "growth_T+1": 6.0869565217, "growth_T+2": 4.5454545455, "growth_T+3": 3.7735849057,
+                    },
                 ]},
                 {"segment": "Gadget", "drivers": [
-                    {"name": "volume", "contribution_pct": 10, "evidence_ids": ["DATA:v"]},
-                    {"name": "price", "contribution_pct": 5, "evidence_ids": ["DATA:p"]},
+                    {
+                        "name": "volume", "contribution_pct": 10, "evidence_ids": ["DATA:v"],
+                        "derivation": "Volume converts demand into units.", "base_value": 500, "unit": "units",
+                        "growth_T+1": 10, "growth_T+2": 8, "growth_T+3": 6,
+                    },
+                    {
+                        "name": "price", "contribution_pct": 5, "evidence_ids": ["DATA:p"],
+                        "derivation": "Pricing/mix drives ASP.", "base_value": 10, "unit": "CNY/unit",
+                        "growth_T+1": 4.5454545455, "growth_T+2": 3.7037037037, "growth_T+3": 3.7735849057,
+                    },
                 ]},
             ],
             "assumption_matrix": {
@@ -441,12 +478,14 @@ class TestPctToDecimalConversion:
             ws = Path(tmp)
             data = self._nested_pct_data()
             # Override p50_growth to already-decimal form AND remove matrix revenue_growth
-            # from ALL periods so the model uses explicit segment-level growth.
+            # and growth drivers from ALL periods so this test exercises the
+            # legacy segment-level fallback path directly.
             data["segment_revenues"]["product_level"]["Widget"]["p50_growth"] = 0.20
             data["segment_revenues"]["product_level"]["Widget"]["T+2_growth"] = 0.18
             data["segment_revenues"]["product_level"]["Widget"]["T+3_growth"] = 0.16
             data["segment_revenues"]["product_level"]["Gadget"]["T+2_growth"] = 0.12
             data["segment_revenues"]["product_level"]["Gadget"]["T+3_growth"] = 0.10
+            data["growth_drivers"] = []
             del data["assumption_matrix"]["T1_FY2026E"]["revenue_growth"]
             del data["assumption_matrix"]["T2_FY2027E"]["revenue_growth"]
             del data["assumption_matrix"]["T3_FY2028E"]["revenue_growth"]

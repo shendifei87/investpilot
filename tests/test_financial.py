@@ -310,6 +310,19 @@ class TestCalcPETrailing:
         assert result["eps_ttm"] == 30.0
         assert result["pe"] == 3.0
 
+    def test_cumulative_ytd_ttm_bridge(self):
+        """Quarterly Tushare-style YTD values should be converted to TTM."""
+        income = pd.DataFrame({
+            "报告期": pd.to_datetime(["2025-03-31", "2025-12-31", "2026-03-31"]),
+            "净利润": [10.0, 100.0, 20.0],
+        })
+        result = calc_pe_trailing(price=100, income=income, shares=10)
+        assert result["valid"] is True
+        assert result["net_income"] == pytest.approx(110.0)
+        assert result["eps_ttm"] == pytest.approx(11.0)
+        assert result["pe"] == pytest.approx(9.09, rel=0.01)
+        assert result["ttm_method"] == "ytd_plus_prior_fy_minus_prior_ytd"
+
     def test_no_income(self):
         result = calc_pe_trailing(price=100, income=pd.DataFrame(), shares=10)
         assert result["valid"] is False
@@ -371,6 +384,17 @@ class TestCalcPS:
         assert result["valid"] is True
         assert result["revenue_per_share"] == 100.0
         assert result["ps"] == 1.0
+
+    def test_cumulative_ytd_revenue_ttm_bridge(self):
+        income = pd.DataFrame({
+            "报告期": pd.to_datetime(["2025-03-31", "2025-12-31", "2026-03-31"]),
+            "营业总收入": [100.0, 1000.0, 250.0],
+        })
+        result = calc_ps_from_statements(price=100, income=income, shares=10)
+        assert result["valid"] is True
+        assert result["total_revenue"] == pytest.approx(1150.0)
+        assert result["revenue_per_share"] == pytest.approx(115.0)
+        assert result["ttm_method"] == "ytd_plus_prior_fy_minus_prior_ytd"
 
 
 class TestCalcEvEbitda:
@@ -438,6 +462,62 @@ class TestCalcAllValuationRatios:
         if result["ev_ebitda"]["valid"]:
             # Should NOT have the CA-CL proxy warning
             assert not any("Cash & Cash Equivalents not found" in w for w in result.get("warnings", []))
+
+    def test_ev_does_not_use_total_liabilities_as_debt(self):
+        """EV must use interest-bearing debt components, not total_liab."""
+        date = pd.Timestamp("2026-12-31")
+        income = pd.DataFrame({
+            date: {
+                "Total Revenue": 500.0,
+                "Operating Income": 100.0,
+                "Net Income": 50.0,
+            }
+        })
+        balance = pd.DataFrame({
+            date: {
+                "Total Stockholder Equity": 1000.0,
+                "total_liab": 9000.0,
+                "Short Term Debt": 50.0,
+                "Long Term Debt": 150.0,
+                "money_cap": 100.0,
+            }
+        })
+        cashflow = pd.DataFrame({
+            date: {"Depreciation And Amortization": 20.0}
+        })
+        result = calc_all_valuation_ratios(
+            price=10, shares=100, income=income, balance=balance, cashflow=cashflow,
+        )
+        assert result["ev_ebitda"]["valid"] is True
+        assert result["ev_ebitda"]["total_debt"] == pytest.approx(200.0)
+        assert result["ev_ebitda"]["cash"] == pytest.approx(100.0)
+        assert result["ev_ebitda"]["ev"] == pytest.approx(1100.0)
+
+    def test_lowercase_financial_fields_work(self):
+        """HK/SEC-style lowercase columns should feed formal calculated ratios."""
+        date = pd.Timestamp("2026-12-31")
+        income = pd.DataFrame({
+            "revenue": [1000.0],
+            "operating_income": [250.0],
+            "net_income": [200.0],
+        }, index=[date])
+        balance = pd.DataFrame({
+            "total_hldr_eqy_exc_min_int": [500.0],
+            "money_cap": [100.0],
+            "st_borr": [50.0],
+            "lt_borr": [100.0],
+        }, index=[date])
+        cashflow = pd.DataFrame({
+            "depr_fa_coga_dpba": [30.0],
+        }, index=[date])
+        result = calc_all_valuation_ratios(
+            price=20, shares=10, income=income, balance=balance, cashflow=cashflow,
+        )
+        assert result["pe_trailing"]["valid"] is True
+        assert result["pe_trailing"]["eps_ttm"] == pytest.approx(20.0)
+        assert result["pb"]["valid"] is True
+        assert result["ps"]["valid"] is True
+        assert result["ev_ebitda"]["valid"] is True
 
     def test_without_forward_eps(self):
         income = _make_yfinance_income()

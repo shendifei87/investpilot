@@ -153,25 +153,38 @@ class HKFetcher(BaseFetcher):
             fina = _ak_retry(ak.stock_hk_financial_indicator_em, symbol=ticker)
             if fina is not None and not fina.empty:
                 row = fina.iloc[0]
+                revenue = _safe_float(row.get("营业总收入"))
+                net_income = _safe_float(row.get("净利润"))
+                eps = _safe_float(row.get("基本每股收益(元)"))
+                bps = _safe_float(row.get("每股净资产(元)"))
+                shares = _safe_float(row.get("已发行股本(股)"))
+                ocf_per_share = _safe_float(row.get("每股经营现金流(元)"))
+                equity = bps * shares if bps is not None and shares else None
+                ocf = ocf_per_share * shares if ocf_per_share is not None and shares else None
                 # Build income-like structure
                 result["income"] = pd.DataFrame([{
-                    "revenue": _safe_float(row.get("营业总收入")),
-                    "net_income": _safe_float(row.get("净利润")),
-                    "eps": _safe_float(row.get("基本每股收益(元)")),
-                    "bps": _safe_float(row.get("每股净资产(元)")),
-                    "ocf_per_share": _safe_float(row.get("每股经营现金流(元)")),
-                    "gross_margin": _safe_float(row.get("销售净利率(%)")),  # field name may vary
+                    "Total Revenue": revenue,
+                    "Net Income": net_income,
+                    "Diluted EPS": eps,
+                    "revenue": revenue,
+                    "net_income": net_income,
+                    "eps": eps,
+                    "bps": bps,
+                    "ocf_per_share": ocf_per_share,
+                    "gross_margin": _safe_float(row.get("销售毛利率(%)")),
                     "roe": _safe_float(row.get("股东权益回报率(%)")),
                     "roa": _safe_float(row.get("总资产回报率(%)")),
                 }])
                 # Balance sheet from the same source
                 result["balance_sheet"] = pd.DataFrame([{
-                    "total_shares": _safe_float(row.get("已发行股本(股)")),
+                    "Total Stockholder Equity": equity,
+                    "total_shares": shares,
                     "market_cap_hkd": _safe_float(row.get("总市值(港元)")),
                     "hk_market_cap_hkd": _safe_float(row.get("港股市值(港元)")),
                 }])
                 result["cashflow"] = pd.DataFrame([{
-                    "ocf_per_share": _safe_float(row.get("每股经营现金流(元)")),
+                    "Operating Cash Flow": ocf,
+                    "ocf_per_share": ocf_per_share,
                 }])
         except Exception as e:
             warnings.append(f"AKShare financial_indicator failed: {e}")
@@ -250,7 +263,10 @@ class HKFetcher(BaseFetcher):
             if fina is not None and not fina.empty:
                 row = fina.iloc[0]
                 result["eps_ttm"] = _safe_float(row.get("基本每股收益(元)"))
+                result["eps_ttm_basis"] = "akshare_latest_reported_eps"
                 result["book_value_per_share"] = _safe_float(row.get("每股净资产(元)"))
+                result["financial_currency"] = "HKD/RMB as reported by AKShare; verify before formal HK valuation"
+                result["price_currency"] = "HKD"
                 result["roe"] = _safe_float(row.get("股东权益回报率(%)"))
                 result["roa"] = _safe_float(row.get("总资产回报率(%)"))
                 result["net_margin"] = _safe_float(row.get("销售净利率(%)"))
@@ -293,7 +309,8 @@ class HKFetcher(BaseFetcher):
                     if not result.get("market_cap"):
                         result["market_cap"] = _safe_float(latest.get("total_market_cap"))
                     result["total_assets"] = _safe_float(latest.get("total_assets"))
-                    result["total_debt"] = _safe_float(latest.get("total_liabilities"))
+                    # NOTE: hk_fina_indicator has no debt breakdown — this is total_liab, NOT interest-bearing debt
+                    result["total_liab"] = _safe_float(latest.get("total_liabilities"))
                     result["total_equity"] = _safe_float(latest.get("total_parent_equity"))
                     result["total_cash"] = _safe_float(latest.get("end_cash"))
             except Exception as e:

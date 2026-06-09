@@ -274,6 +274,7 @@ class TestStructuredValidation:
             "pe_trailing": {"pe": 20.0, "valid": True},
             "pb": {"pb": 3.0, "valid": True},
             "ps": {"ps": 5.0, "valid": True},
+            "ev_ebitda": {"ev_ebitda": 12.0, "valid": True},
         }), encoding="utf-8")
         reviewed = tmp_path / "_reviewed_assumptions.json"
         reviewed.write_text(json.dumps({
@@ -646,6 +647,7 @@ class TestStep4Guard:
             "pe_trailing": {"pe": 20.0, "valid": True},
             "pb": {"pb": 3.0, "valid": True},
             "ps": {"ps": 5.0, "valid": True},
+            "ev_ebitda": {"ev_ebitda": 12.0, "valid": True},
         }), encoding="utf-8")
         (tmp_path / "_reviewed_assumptions.json").write_text(json.dumps({
             "reviewed_at": "2026-01-01",

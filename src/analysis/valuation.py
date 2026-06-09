@@ -1,9 +1,12 @@
+import logging
 import warnings
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def load_price_series(workspace_dir) -> pd.Series:
@@ -164,7 +167,8 @@ def pe_band_analysis(prices: pd.Series, eps_series: pd.Series) -> dict:
             "p90": float(pe.quantile(0.90)),
             "percentile_rank": float((pe <= current).mean()),
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning("pe_percentile_history failed: %s", exc)
         return {}
 
 
@@ -175,6 +179,7 @@ def dcf_model(
     terminal_growth: float,
     years: int,
     shares_outstanding: float,
+    net_debt: float = 0.0,
 ) -> dict:
     """Simple DCF model.
 
@@ -200,15 +205,19 @@ def dcf_model(
         pv_fcf = sum(cf / (1 + wacc) ** (i + 1) for i, cf in enumerate(projected_fcf))
         pv_terminal = terminal_value / (1 + wacc) ** years
 
-        intrinsic_value = pv_fcf + pv_terminal
-        per_share = intrinsic_value / shares_outstanding if shares_outstanding > 0 else 0
+        enterprise_value = pv_fcf + pv_terminal
+        equity_value = enterprise_value - float(net_debt or 0.0)
+        per_share = equity_value / shares_outstanding if shares_outstanding > 0 else 0
 
         return {
             "projected_fcf": projected_fcf,
             "terminal_value": terminal_value,
             "pv_fcf": pv_fcf,
             "pv_terminal": pv_terminal,
-            "intrinsic_value_total": intrinsic_value,
+            "enterprise_value": enterprise_value,
+            "net_debt": float(net_debt or 0.0),
+            "equity_value": equity_value,
+            "intrinsic_value_total": equity_value,
             "intrinsic_value_per_share": per_share,
             "assumptions": {
                 "initial_fcf": fcf,
@@ -216,6 +225,8 @@ def dcf_model(
                 "wacc": wacc,
                 "terminal_growth": terminal_growth,
                 "projection_years": years,
+                "net_debt": float(net_debt or 0.0),
+                "fcf_basis": "FCFF enterprise value less net debt",
             },
         }
     except Exception as e:
@@ -233,6 +244,7 @@ def reverse_dcf(
     g_max: float = 0.50,
     tolerance: float = 0.001,
     max_iter: int = 100,
+    net_debt: float = 0.0,
 ) -> dict:
     """Reverse DCF: find the implied FCF growth rate baked into current price.
 
@@ -244,19 +256,22 @@ def reverse_dcf(
     if current_price <= 0 or shares_outstanding <= 0 or base_fcf <= 0:
         return {"error": "Inputs must be positive"}
 
-    target_value = current_price * shares_outstanding
+    target_equity_value = current_price * shares_outstanding
+    target_enterprise_value = target_equity_value + float(net_debt or 0.0)
 
     lo, hi = g_min, g_max
     for _ in range(max_iter):
         mid = (lo + hi) / 2
-        result = dcf_model(base_fcf, mid, wacc, terminal_growth, years, shares_outstanding)
+        result = dcf_model(
+            base_fcf, mid, wacc, terminal_growth, years, shares_outstanding, net_debt=net_debt,
+        )
         if "error" in result:
             return {"error": result["error"]}
 
-        intrinsic = result["intrinsic_value_total"]
-        if abs(intrinsic - target_value) / target_value < tolerance:
+        intrinsic = result["enterprise_value"]
+        if abs(intrinsic - target_enterprise_value) / target_enterprise_value < tolerance:
             break
-        if intrinsic < target_value:
+        if intrinsic < target_enterprise_value:
             lo = mid
         else:
             hi = mid
@@ -293,6 +308,9 @@ def reverse_dcf(
         "implied_growth_pct": f"{implied_g:.1%}",
         "current_price": current_price,
         "base_fcf": base_fcf,
+        "target_equity_value": target_equity_value,
+        "target_enterprise_value": target_enterprise_value,
+        "net_debt": float(net_debt or 0.0),
         "wacc": wacc,
         "terminal_growth": terminal_growth,
         "years": years,
@@ -450,38 +468,14 @@ def calc_historical_pe_series(
             pe = prices / latest_eps
             pe = pe.replace([np.inf, -np.inf], np.nan).dropna()
         else:
-            # Resample quarterly EPS to daily by forward-filling
-            # Then compute rolling 4-quarter sum
-            eps_daily = eps_quarterly.reindex(
-                prices.index.union(eps_quarterly.index)
-            ).sort_index()
-            # Forward-fill: each day uses the most recent quarterly EPS known
-            eps_daily = eps_daily.ffill()
-
-            # Align to price dates
-            eps_daily = eps_daily.reindex(prices.index, method="ffill")
-
-            # Rolling TTM EPS: we need sum of last 4 unique quarters.
-            # Since EPS is forward-filled daily, use the last reported quarterly value
-            # and assume the last 4 quarters sum = 4x the latest quarterly value
-            # (approximation when we only have quarterly totals, not individual quarter data).
-            # Better approach: if eps_quarterly has per-quarter values, sum last 4.
-            ttm_eps = eps_daily * 4  # annualize the latest quarterly EPS
-            # More accurate: if we have actual quarterly data, compute proper TTM
-            if len(eps_quarterly) >= 4:
-                # Use the actual sum of last 4 quarters for the latest period
-                ttm_eps_latest = float(eps_quarterly.iloc[-4:].sum())
-                ttm_eps = pd.Series(ttm_eps_latest, index=prices.index)
-                # For historical dates, compute TTM at each quarter-end
-                # by summing the 4 quarters up to that date
-                for i in range(4, len(eps_quarterly)):
-                    q_date = eps_quarterly.index[i]
-                    ttm_at_q = float(eps_quarterly.iloc[i-3:i+1].sum())
-                    # Apply this TTM EPS to all price dates between this and next quarter
-                    mask = prices.index >= q_date
-                    if i + 1 < len(eps_quarterly):
-                        mask = mask & (prices.index < eps_quarterly.index[i + 1])
-                    ttm_eps.loc[mask] = ttm_at_q
+            # Compute point-in-time TTM only after four quarters are known.
+            # Do not backfill latest/full-year EPS into earlier dates.
+            ttm_by_report_date = eps_quarterly.rolling(window=4, min_periods=4).sum().dropna()
+            if ttm_by_report_date.empty:
+                return {"error": "Not enough quarterly EPS data to compute TTM"}
+            ttm_eps = ttm_by_report_date.reindex(
+                prices.index.union(ttm_by_report_date.index)
+            ).sort_index().ffill().reindex(prices.index)
 
             # Filter to dates with valid TTM EPS
             valid = ttm_eps > 0

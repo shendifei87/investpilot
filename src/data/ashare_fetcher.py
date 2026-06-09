@@ -9,8 +9,47 @@ All data sourced exclusively from Tushare Pro API:
 """
 
 from datetime import datetime, timedelta
+import math
 
 from src.data.base import BaseTushareFetcher, FetchResult
+
+
+def _ttm_from_cumulative_ytd(df, value_col: str):
+    """Compute latest TTM from Tushare cumulative YTD rows.
+
+    For non-year-end rows: TTM = latest YTD + prior FY - prior-year same-period YTD.
+    Falls back to the latest annual row when a true TTM bridge is unavailable.
+    """
+    if df is None or df.empty or value_col not in df.columns or "end_date" not in df.columns:
+        return None, "missing"
+
+    tmp = df.copy()
+    tmp["_end_str"] = tmp["end_date"].astype(str)
+    tmp = tmp[tmp[value_col].notna() & tmp["_end_str"].str.len().ge(8)]
+    if tmp.empty:
+        return None, "missing"
+
+    tmp = tmp.sort_values("_end_str")
+    latest = tmp.iloc[-1]
+    latest_end = str(latest["_end_str"])
+    latest_value = float(latest[value_col])
+    if latest_end.endswith("1231"):
+        return latest_value, "latest_annual"
+
+    year = int(latest_end[:4])
+    prior_fy_end = f"{year - 1}1231"
+    prior_same_end = f"{year - 1}{latest_end[4:]}"
+    prior_fy = tmp[tmp["_end_str"] == prior_fy_end]
+    prior_same = tmp[tmp["_end_str"] == prior_same_end]
+    if not prior_fy.empty and not prior_same.empty:
+        ttm = latest_value + float(prior_fy.iloc[-1][value_col]) - float(prior_same.iloc[-1][value_col])
+        return ttm, "ytd_plus_prior_fy_minus_prior_ytd"
+
+    annual = tmp[tmp["_end_str"].str.endswith("1231")]
+    if not annual.empty:
+        return float(annual.iloc[-1][value_col]), "latest_available_annual"
+
+    return latest_value, "latest_period_fallback"
 
 
 class AshareFetcher(BaseTushareFetcher):
@@ -128,12 +167,17 @@ class AshareFetcher(BaseTushareFetcher):
         try:
             fina = tushare_client.fina_indicator(ts_code=ts_code, start_date=statement_start)
             if fina is not None and not fina.empty:
+                eps_ttm, eps_basis = _ttm_from_cumulative_ytd(fina, "eps")
                 if "end_date" in fina.columns:
                     fina = fina.sort_values("end_date", ascending=False)
+                    latest = fina.iloc[0]
                 elif "ann_date" in fina.columns:
                     fina = fina.sort_values("ann_date", ascending=False)
-                latest = fina.iloc[0]
-                result["eps_ttm"] = latest.get("eps")
+                    latest = fina.iloc[0]
+                else:
+                    latest = fina.iloc[0]
+                result["eps_ttm"] = eps_ttm if eps_ttm is not None else latest.get("eps")
+                result["eps_ttm_basis"] = eps_basis
                 result["book_value_per_share"] = latest.get("bps")
                 result["roe"] = latest.get("roe")
                 result["ebitda"] = latest.get("ebitda")
@@ -152,7 +196,23 @@ class AshareFetcher(BaseTushareFetcher):
                     subset=["end_date"], keep="first"
                 )
                 latest = bs.iloc[0]
-                result["total_debt"] = latest.get("total_liab")
+                # Interest-bearing debt ≠ total liabilities
+                debt_components = [
+                    latest.get("st_borr"),              # 短期借款
+                    latest.get("lt_borr"),              # 长期借款
+                    latest.get("bond_payable"),         # 应付债券
+                    latest.get("non_cur_liab_due_1y"),  # 一年内到期的非流动负债
+                ]
+                valid_debt_components = []
+                for value in debt_components:
+                    try:
+                        num = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(num):
+                        valid_debt_components.append(num)
+                total_debt = sum(valid_debt_components)
+                result["total_debt"] = total_debt if total_debt > 0 else None
                 result["total_cash"] = latest.get("money_cap")
                 result["total_assets"] = latest.get("total_assets")
                 result["total_equity"] = latest.get("total_hldr_eqy_exc_min_int")

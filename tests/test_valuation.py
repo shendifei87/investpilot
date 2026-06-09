@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from src.analysis.valuation import (
+    calc_historical_pe_series,
     dcf_model,
     reverse_dcf,
     forward_pe_band,
@@ -177,6 +178,35 @@ class TestForwardPEBand:
 
         assert result["method"] == "point_in_time_forward_eps"
         assert result["eps_series"].index.min() >= pd.Timestamp("2020-07-01")
+
+
+class TestHistoricalPESeries:
+    def test_ttm_eps_not_backfilled_before_available(self):
+        prices = pd.Series(
+            [10.0, 11.0, 12.0, 13.0, 14.0],
+            index=pd.to_datetime([
+                "2025-03-31",
+                "2025-06-30",
+                "2025-09-30",
+                "2025-12-31",
+                "2026-03-31",
+            ]),
+        )
+        eps = pd.Series(
+            [1.0, 1.0, 1.0, 1.0],
+            index=pd.to_datetime([
+                "2025-03-31",
+                "2025-06-30",
+                "2025-09-30",
+                "2025-12-31",
+            ]),
+        )
+        result = calc_historical_pe_series(prices, eps)
+        assert "error" not in result
+        pe = result["pe_series"]
+        assert pe.index.min() == pd.Timestamp("2025-12-31")
+        assert pd.Timestamp("2025-03-31") not in pe.index
+        assert pe.loc[pd.Timestamp("2025-12-31")] == pytest.approx(13.0 / 4.0)
 
 
 class TestLoadPriceSeries:

@@ -610,13 +610,34 @@ def _auto_calculate_valuation(results, output_dir):
         return
 
     try:
-        from src.analysis.financial import calc_all_valuation_ratios
+        from src.analysis.financial import (
+            calc_all_valuation_ratios,
+            calc_ev_ebitda,
+            calc_pb,
+            calc_pe,
+            calc_ps,
+        )
 
         val_data = val_result.data
         fin_data = fin_result.data
 
         if not isinstance(val_data, dict) or not isinstance(fin_data, dict):
             return
+
+        def _float_or_none(value):
+            try:
+                if value is None or value == "":
+                    return None
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _valid_metric(metric, value_key):
+            return (
+                isinstance(metric, dict)
+                and metric.get("valid") is True
+                and metric.get(value_key) is not None
+            )
 
         price = val_data.get("current_price")
         shares = val_data.get("shares_outstanding")
@@ -643,6 +664,70 @@ def _auto_calculate_valuation(results, output_dir):
             forward_label="T+1",
         )
 
+        fallback_warnings = calculated.setdefault("warnings", [])
+        price_f = _float_or_none(price)
+        shares_f = _float_or_none(shares)
+        if price_f is None and _float_or_none(val_data.get("market_cap")) and shares_f:
+            price_f = _float_or_none(val_data.get("market_cap")) / shares_f
+
+        eps_ttm = _float_or_none(val_data.get("eps_ttm"))
+        if price_f is not None and eps_ttm is not None and not _valid_metric(calculated.get("pe_trailing"), "pe"):
+            pe_res = calc_pe(
+                price_f,
+                eps_ttm,
+                label=str(val_data.get("eps_ttm_basis") or "TTM raw input"),
+            )
+            pe_res["input_source"] = "valuation_raw_inputs.eps_ttm"
+            calculated["pe_trailing"] = pe_res
+            if pe_res.get("valid"):
+                fallback_warnings.append("PE trailing calculated from raw eps_ttm input fallback.")
+
+        bvps = _float_or_none(val_data.get("book_value_per_share"))
+        if price_f is not None and bvps is not None and not _valid_metric(calculated.get("pb"), "pb"):
+            pb_res = calc_pb(price_f, bvps, label="MRQ raw input")
+            pb_res["input_source"] = "valuation_raw_inputs.book_value_per_share"
+            calculated["pb"] = pb_res
+            if pb_res.get("valid"):
+                fallback_warnings.append("PB calculated from raw book_value_per_share input fallback.")
+
+        revenue_ttm = _float_or_none(val_data.get("revenue_ttm"))
+        if (
+            price_f is not None and shares_f and revenue_ttm is not None
+            and not _valid_metric(calculated.get("ps"), "ps")
+        ):
+            ps_res = calc_ps(price_f, revenue_ttm / shares_f, label="TTM raw input")
+            ps_res["total_revenue"] = revenue_ttm
+            ps_res["shares"] = shares_f
+            ps_res["input_source"] = "valuation_raw_inputs.revenue_ttm"
+            calculated["ps"] = ps_res
+            if ps_res.get("valid"):
+                fallback_warnings.append("PS calculated from raw revenue_ttm input fallback.")
+
+        market_cap = _float_or_none(val_data.get("market_cap"))
+        if market_cap is None and price_f is not None and shares_f:
+            market_cap = price_f * shares_f
+        ebitda = _float_or_none(val_data.get("ebitda"))
+        if market_cap is not None and ebitda is not None and not _valid_metric(calculated.get("ev_ebitda"), "ev_ebitda"):
+            total_debt = _float_or_none(val_data.get("total_debt"))
+            total_cash = _float_or_none(val_data.get("total_cash"))
+            if total_debt is None:
+                total_debt = 0.0
+                fallback_warnings.append("EV/EBITDA raw fallback: total_debt missing; using 0, not total liabilities.")
+            if total_cash is None:
+                total_cash = 0.0
+                fallback_warnings.append("EV/EBITDA raw fallback: total_cash missing; using 0 cash.")
+            ev_res = calc_ev_ebitda(
+                market_cap,
+                total_debt,
+                total_cash,
+                ebitda,
+                label="TTM raw input",
+            )
+            ev_res["input_source"] = "valuation_raw_inputs.market_cap/debt/cash/ebitda"
+            calculated["ev_ebitda"] = ev_res
+            if ev_res.get("valid"):
+                fallback_warnings.append("EV/EBITDA calculated from raw EV inputs fallback.")
+
         # Save calculated valuation
         calc_path = output_dir / "calculated_valuation.json"
         calc_path.write_text(
@@ -657,6 +742,8 @@ def _auto_calculate_valuation(results, output_dir):
             "book_value_per_share", "revenue_ttm", "market_cap", "enterprise_value",
             "total_debt", "total_cash", "ebitda", "target_mean_price",
             "recommendation", "dividend_yield", "beta",
+            "eps_ttm_basis", "financial_currency", "price_currency", "price_date",
+            "net_income_ttm",
         ]
         raw_inputs = {k: val_data[k] for k in raw_keys if k in val_data and val_data[k] is not None}
         raw_path = output_dir / "valuation_raw_inputs.json"

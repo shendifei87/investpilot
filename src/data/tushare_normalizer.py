@@ -138,7 +138,7 @@ def normalize_balance_df(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     Input columns: ts_code, ann_date, end_date, total_assets, total_cur_assets,
                    total_liab, total_cur_liab, total_hldr_eqy_exc_min_int,
-                   monetary_capital, accounts_receiv, st_borr, lt_borr, ...
+                   money_cap/monetary_capital, accounts_receiv, st_borr, lt_borr, ...
     """
     df = _normalize_financial_df(raw_df)
     if df.empty:
@@ -150,10 +150,13 @@ def normalize_balance_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     _add_alias(df, "total_cur_assets", "流动资产合计")
     _add_alias(df, "total_cur_liab", "流动负债合计")
     _add_alias(df, "total_assets", "资产总计")
+    _add_alias(df, "money_cap", "货币资金")
     _add_alias(df, "monetary_capital", "货币资金")
     _add_alias(df, "accounts_receiv", "应收账款")
     _add_alias(df, "st_borr", "短期借款")
     _add_alias(df, "lt_borr", "长期借款")
+    _add_alias(df, "bond_payable", "应付债券")
+    _add_alias(df, "non_cur_liab_due_1y", "一年内到期的非流动负债")
 
     return df
 

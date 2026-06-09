@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import mistune
 import re
 import json
@@ -431,7 +433,10 @@ def _extract_target_price(ws: Path, mc: dict, sa: dict | None, read_model_text) 
     # Priority 2: step4 bridge_analysis
     if sa and isinstance(sa, dict):
         bridge = sa.get('bridge_analysis', {})
-        t1 = bridge.get('t1_2026E', {})
+        from datetime import date as _date
+        forward_year = _date.today().year + 1
+        t1_key = f"t1_{forward_year}E"
+        t1 = bridge.get(t1_key, {})
         tp = t1.get('target_price_hkd')
         if tp is not None:
             return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
@@ -1022,15 +1027,9 @@ def generate_report_html(
         metrics.update(summary_overrides)
 
     # --- Determine currency from ticker ---
-    currency = 'CNY'  # default
-    if '.HK' in ticker.upper():
-        currency = 'HKD'
-    elif ticker.replace('.', '').replace('S', '').replace('Z', '').isdigit() and len(ticker.split('.')[0]) <= 6:
-        pass  # A-share, CNY
-    else:
-        # Check for US stocks (no suffix or .US)
-        if not ticker[0].isdigit():
-            currency = 'USD'
+    from config.ticker_rules import detect_market
+    market = detect_market(ticker)
+    currency = {"ASHARE": "CNY", "HK": "HKD", "US": "USD"}.get(market, "CNY")
 
     # --- Build summary cards ---
     card_defs = [

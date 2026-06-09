@@ -209,10 +209,13 @@ class TestNormalizeBalanceDF:
             "total_liab": [4000],
             "total_cur_liab": [1500],
             "total_hldr_eqy_exc_min_int": [6000],
+            "money_cap": [1250],
             "monetary_capital": [1200],
             "accounts_receiv": [500],
             "st_borr": [800],
             "lt_borr": [1200],
+            "bond_payable": [300],
+            "non_cur_liab_due_1y": [100],
         })
 
     def test_adds_report_period(self):
@@ -224,6 +227,7 @@ class TestNormalizeBalanceDF:
         aliases = [
             "所有者权益合计", "负债合计", "流动资产合计", "流动负债合计",
             "资产总计", "货币资金", "应收账款", "短期借款", "长期借款",
+            "应付债券", "一年内到期的非流动负债",
         ]
         for alias in aliases:
             assert alias in df.columns, f"Missing alias: {alias}"
@@ -233,6 +237,7 @@ class TestNormalizeBalanceDF:
         assert df.iloc[0]["资产总计"] == 10000
         assert df.iloc[0]["负债合计"] == 4000
         assert df.iloc[0]["所有者权益合计"] == 6000
+        assert df.iloc[0]["货币资金"] == 1250
 
     def test_deduplicates(self):
         raw = pd.DataFrame({

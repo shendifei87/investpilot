@@ -1080,7 +1080,7 @@ def validate_workspace_valuation(workspace_dir: str | Path) -> dict:
         )
 
     # Check that key ratios are present
-    expected_keys = ["pe_trailing", "pb", "ps"]
+    expected_keys = ["pe_trailing", "pb", "ps", "ev_ebitda"]
     missing_ratios = [k for k in expected_keys if k not in calc_data]
     if missing_ratios:
         fix_required.append(

@@ -1,5 +1,7 @@
 """Shared utility functions for analysis modules."""
 
+from __future__ import annotations
+
 
 def coerce_float(value, default: float | None = None) -> float | None:
     """Best-effort float coercion for values like '12.5%', '18x', '1,234'.

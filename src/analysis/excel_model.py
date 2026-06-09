@@ -35,9 +35,10 @@ CHECK_PASS = "92D050"      # green
 CHECK_FAIL = "FF4444"      # red
 WHITE = "FFFFFF"
 
-# Number of historical period columns (FY-2A, FY-1A, FY0A)
+# Number of historical period columns (FY-2A, FY-1A, FY0A).
+# Column B is reserved for base values / source text across all tabs.
 N_HIST_COLS = 3
-PROJ_COL_START = 2 + N_HIST_COLS  # column 5 (E) = first projection column
+PROJ_COL_START = 3 + N_HIST_COLS  # column 6 (F) = first projection column
 
 
 # ── SheetLayout — safe named row-position tracking ────────────────────
@@ -86,7 +87,7 @@ def _proj_col(period_idx: int) -> int:
 
 def _hist_col(hist_idx: int) -> int:
     """Return 1-indexed column for historical period *hist_idx* (0-based, 0=FY-2A)."""
-    return 2 + hist_idx
+    return 3 + hist_idx
 
 
 def _col_letter(col: int) -> str:
@@ -206,7 +207,10 @@ def _extract_driver_values(
         for p in periods:
             g = d.get(f"growth_{p}") or d.get(f"{p}_growth")
             if g is not None:
-                growths[p] = _num(g)
+                growth = _num(g)
+                if abs(growth) > 1.0:
+                    growth = growth / 100.0
+                growths[p] = growth
 
         if base_val is not None and len(growths) >= len(periods):
             enriched.append({
@@ -339,13 +343,14 @@ def _build_revenue_build_tab(wb, model: dict, drivers_map: dict[str, list[dict]]
 
             for idx_p in range(len(periods)):
                 pcl = _proj_cl(idx_p)
+                prior_ref = f"{_col_letter(2)}{rr}" if idx_p == 0 else f"{_proj_cl(idx_p - 1)}{rr}"
                 product_parts = []
                 for dr_r in driver_rows:
                     product_parts.append(f"(1+{pcl}{dr_r})")
                 if len(product_parts) >= 2:
-                    formula = f"={_col_letter(2)}{rr}*({'*'.join(product_parts)})"
+                    formula = f"={prior_ref}*({'*'.join(product_parts)})"
                 elif len(product_parts) == 1:
-                    formula = f"={_col_letter(2)}{rr}*{product_parts[0]}"
+                    formula = f"={prior_ref}*{product_parts[0]}"
                 else:
                     formula = str(seg["forecast"][periods[idx_p]]["revenue"])
                 ws.cell(row=rr, column=_proj_col(idx_p)).value = (
@@ -635,14 +640,14 @@ def _build_income_statement_tab(wb, model: dict, rev_layout: SheetLayout) -> She
     ws.cell(row=r_tax_pct, column=1, value="  Tax Rate % (Step 4)")
     ws.cell(row=r_tax_pct, column=2, value="Step 4 assumption_matrix → tax_rate")
     tax_data = is_lookup.get("Tax Expense", {})
-    ebit_data_lu = is_lookup.get("EBIT", {})
+    ebt_data_lu = is_lookup.get("EBT (Pre-tax Income)", {})
     for h_idx in range(N_HIST_COLS):
         ws.cell(row=r_tax_pct, column=_hist_col(h_idx), value="N/A")
         _apply_historical_font(ws, r_tax_pct, _hist_col(h_idx), _hist_col(h_idx))
     for idx_p, p in enumerate(periods):
         tax_abs = tax_data.get("values", {}).get(p, 0.0)
-        ebit_abs = ebit_data_lu.get("values", {}).get(p, 0.0)
-        rate = tax_abs / ebit_abs if ebit_abs else 0.0
+        ebt_abs = ebt_data_lu.get("values", {}).get(p, 0.0)
+        rate = tax_abs / ebt_abs if ebt_abs else 0.0
         ws.cell(row=r_tax_pct, column=_proj_col(idx_p), value=rate)
     _apply_projection_font(ws, r_tax_pct, _proj_col(0), _proj_col(len(periods) - 1))
     _set_number_format(ws, r_tax_pct, _proj_col(0), _proj_col(len(periods) - 1), '0.0%')
@@ -1357,7 +1362,12 @@ def _build_cash_flow_tab(wb, model: dict, is_layout: SheetLayout, bs_layout: She
     return layout
 
 
-def _build_valuation_bridge_tab(wb, model: dict, is_layout: SheetLayout) -> SheetLayout:
+def _build_valuation_bridge_tab(
+    wb,
+    model: dict,
+    is_layout: SheetLayout,
+    bs_layout: SheetLayout,
+) -> SheetLayout:
     """Tab 5: Valuation Bridge."""
     from openpyxl.styles import Font
     ws = wb.create_sheet("Valuation Bridge")
@@ -1381,6 +1391,7 @@ def _build_valuation_bridge_tab(wb, model: dict, is_layout: SheetLayout) -> Shee
     _apply_header_style(ws, r, _proj_col(len(periods) - 1))
 
     is_ws_name = _safe_sheet_name("Income Statement")
+    bs_ws_name = _safe_sheet_name("Balance Sheet")
 
     # EPS (Diluted)
     r_eps = layout.add("v_eps")
@@ -1444,15 +1455,19 @@ def _build_valuation_bridge_tab(wb, model: dict, is_layout: SheetLayout) -> Shee
     _set_number_format(ws, r_mc, _proj_col(0), _proj_col(len(periods) - 1), '#,##0')
 
     # Net Debt
-    debt = inputs.get("debt", 0.0)
     r_nd = layout.add("v_net_debt")
     ws.cell(row=r_nd, column=1, value="Net Debt")
-    ws.cell(row=r_nd, column=2, value="Debt - Cash")
+    ws.cell(row=r_nd, column=2, value="Short-term Debt + Long-term Debt - Cash")
     for h_idx in range(N_HIST_COLS):
         ws.cell(row=r_nd, column=_hist_col(h_idx), value="N/A")
         _apply_historical_font(ws, r_nd, _hist_col(h_idx), _hist_col(h_idx))
     for idx_p in range(len(periods)):
-        ws.cell(row=r_nd, column=_proj_col(idx_p), value=debt)
+        pcl = _proj_cl(idx_p)
+        ws.cell(row=r_nd, column=_proj_col(idx_p)).value = (
+            f"='{bs_ws_name}'!{pcl}{bs_layout['st_debt']}"
+            f"+'{bs_ws_name}'!{pcl}{bs_layout['lt_debt']}"
+            f"-'{bs_ws_name}'!{pcl}{bs_layout['cash']}"
+        )
     _apply_projection_font(ws, r_nd, _proj_col(0), _proj_col(len(periods) - 1))
     _set_number_format(ws, r_nd, _proj_col(0), _proj_col(len(periods) - 1), '#,##0')
 
@@ -1781,7 +1796,7 @@ def generate_excel_model(workspace_dir: str | Path, ticker: str = "") -> Path:
             row=bs_layout["cash"], column=_proj_col(idx_p),
         ).value = f"='{cf_ws_name}'!{pcl}{cf_layout['cf_end_cash']}"
 
-    val_layout = _build_valuation_bridge_tab(wb, model, is_layout)
+    val_layout = _build_valuation_bridge_tab(wb, model, is_layout, bs_layout)
     checks_layout = _build_assumptions_checks_tab(
         wb, model, rev_layout, is_layout, bs_layout, cf_layout,
     )

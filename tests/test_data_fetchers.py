@@ -11,7 +11,7 @@ import types
 import pandas as pd
 import pytest
 
-from src.data.ashare_fetcher import AshareFetcher
+from src.data.ashare_fetcher import AshareFetcher, _ttm_from_cumulative_ytd
 from src.data.base import BaseTushareFetcher, FetchResult
 from src.data.us_fetcher import USFetcher
 
@@ -156,6 +156,10 @@ class TestAshareFetcherIntegration:
             "ann_date": "20260401",
             "end_date": "20251231",
             "total_liab": 10000.0,
+            "st_borr": 800.0,
+            "lt_borr": 1200.0,
+            "bond_payable": 300.0,
+            "non_cur_liab_due_1y": 100.0,
             "money_cap": 5000.0,
             "total_assets": 30000.0,
             "total_hldr_eqy_exc_min_int": 15000.0,
@@ -170,6 +174,19 @@ class TestAshareFetcherIntegration:
         assert result.data.get("shares_outstanding") == 10_000_000.0
         # Market cap should be converted from 万元 (× 10000)
         assert result.data.get("market_cap") == 2_500_000_000.0
+        assert result.data.get("eps_ttm_basis") == "latest_annual"
+        # Interest-bearing debt components only; total_liab must not be treated as debt.
+        assert result.data.get("total_debt") == 2400.0
+
+    def test_ttm_from_cumulative_ytd(self):
+        df = pd.DataFrame([
+            {"end_date": "20250331", "eps": 1.0},
+            {"end_date": "20251231", "eps": 10.0},
+            {"end_date": "20260331", "eps": 2.0},
+        ])
+        value, basis = _ttm_from_cumulative_ytd(df, "eps")
+        assert value == pytest.approx(11.0)
+        assert basis == "ytd_plus_prior_fy_minus_prior_ytd"
 
     def test_fetch_price_history_with_mock(self, ashare_fetcher, mock_tushare):
         """Price history should return a DataFrame."""

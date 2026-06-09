@@ -45,12 +45,15 @@ OPTIONAL_BS_INPUTS = [
     "ar_days",
     "inv_days",
     "ap_days",
+    "prepaid_ca_ratio",
     "intangible_assets",
     "deferred_rev_ratio",
     "accrued_ratio",
     "other_ncl_ratio",
     "st_debt",
     "lt_debt",
+    "paid_in_capital",
+    "paid_in_capital_ratio",
 ]
 
 REQUIRED_REVIEWED_VARIABLES = {
@@ -264,6 +267,82 @@ def _base_inputs(structured: dict, workspace: Path) -> tuple[dict, dict]:
     return inputs, lineage
 
 
+def _pct_input(value: Any, name: str, default: float | None = None) -> float | None:
+    raw = _num(value, default)
+    if raw is None:
+        return None
+    lname = name.lower()
+    if (_is_pct_variable(name) or "growth" in lname or lname.endswith("_rate")) and abs(raw) > 1.0:
+        raw = raw / 100.0
+    return raw
+
+
+def _growth_drivers_by_segment(structured: dict) -> dict[str, list[dict]]:
+    raw = structured.get("growth_drivers", []) or []
+    result: dict[str, list[dict]] = {}
+    if not isinstance(raw, list):
+        return result
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        segment = str(entry.get("segment", "")).strip()
+        drivers = entry.get("drivers", [])
+        if segment and isinstance(drivers, list):
+            result[segment] = [d for d in drivers if isinstance(d, dict)]
+    return result
+
+
+def _driver_period_keys(period: str, idx: int) -> list[str]:
+    aliases = [period, f"T+{idx + 1}", f"T{idx + 1}", f"FY{idx + 1}"]
+    return [f"growth_{a}" for a in aliases] + [f"{a}_growth" for a in aliases]
+
+
+def _driver_growth_for_period(segment: str, drivers: list[dict], period: str, idx: int) -> tuple[float, dict]:
+    if not drivers:
+        raise ValueError(f"Segment '{segment}' has no growth drivers")
+
+    factor = 1.0
+    driver_lineage = []
+    for driver in drivers:
+        name = str(driver.get("name", "driver")).strip() or "driver"
+        raw = None
+        source_key = ""
+        for key in _driver_period_keys(period, idx):
+            if key in driver:
+                raw = driver.get(key)
+                source_key = key
+                break
+        if raw is None:
+            raise ValueError(
+                f"Growth driver '{name}' for segment '{segment}' is missing per-period growth "
+                f"for {period}. Provide one of: {_driver_period_keys(period, idx)}"
+            )
+        growth = _pct_input(raw, source_key, 0.0)
+        factor *= 1.0 + float(growth or 0.0)
+        refs = driver.get("evidence_ids") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        driver_lineage.append({
+            "driver": name,
+            "field": source_key,
+            "value": growth,
+            "base_value": driver.get("base_value"),
+            "unit": driver.get("unit", ""),
+            "evidence_ids": refs,
+            "derivation": driver.get("derivation", ""),
+        })
+
+    return factor - 1.0, {
+        "source": "step4_structured_assumptions.json",
+        "variable": f"{segment}_driver_growth",
+        "requested_period": period,
+        "case": "p50",
+        "value": factor - 1.0,
+        "derivation": "Multiplicative driver build: Π(1 + driver_growth) - 1",
+        "drivers": driver_lineage,
+    }
+
+
 def _load_reviewed_assumptions(workspace: Path) -> dict:
     reviewed_path = workspace / "_reviewed_assumptions.json"
     if not reviewed_path.exists():
@@ -336,45 +415,53 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
 
     model_segments = []
     total_revenue = {p: 0.0 for p in periods}
+    driver_map = _growth_drivers_by_segment(structured)
     for seg in segments:
         name = str(seg.get("name", "Segment"))
         base = _num(seg.get("base_revenue"), 0.0)
         values = {}
         prev = base
+        drivers = driver_map.get(name, [])
         for idx, period in enumerate(periods):
             lineage = None
-            growth = _num(seg.get(f"{period}_growth"), None)
-            if growth is not None and _is_pct_variable(f"{period}_growth") and abs(growth) > 1.0:
-                growth = growth / 100.0
-            if growth is None:
-                if idx == 0 and seg.get("p50_growth") is not None:
-                    growth = _num(seg.get("p50_growth"), 0.0)
-                    if _is_pct_variable("p50_growth") and abs(growth) > 1.0:
-                        growth = growth / 100.0
+            if drivers:
+                growth, lineage = _driver_growth_for_period(name, drivers, period, idx)
+                used_reviewed_variables.add("rev_growth")
+            else:
+                growth = _num(seg.get(f"{period}_growth"), None)
+                if growth is not None and _is_pct_variable(f"{period}_growth") and abs(growth) > 1.0:
+                    growth = growth / 100.0
+                if growth is None:
+                    if idx == 0 and seg.get("p50_growth") is not None:
+                        growth = _num(seg.get("p50_growth"), 0.0)
+                        if _is_pct_variable("p50_growth") and abs(growth) > 1.0:
+                            growth = growth / 100.0
+                        lineage = {
+                            "source": "step4_structured_assumptions.json",
+                            "field": f"segment_revenues.{name}.p50_growth",
+                            "requested_period": period,
+                            "case": "p50",
+                            "value": growth,
+                            "warning": "Fallback path: no growth_drivers for this segment",
+                        }
+                        used_reviewed_variables.add("rev_growth")
+                    else:
+                        growth, lineage = _require_assumption_value(
+                            lookup,
+                            [f"{name}_rev_growth", "rev_growth", "revenue_growth"],
+                            period,
+                        )
+                        used_reviewed_variables.add("rev_growth")
+                else:
                     lineage = {
                         "source": "step4_structured_assumptions.json",
-                        "field": f"segment_revenues.{name}.p50_growth",
+                        "field": f"segment_revenues.{name}.{period}_growth",
                         "requested_period": period,
                         "case": "p50",
                         "value": growth,
+                        "warning": "Fallback path: no growth_drivers for this segment",
                     }
                     used_reviewed_variables.add("rev_growth")
-                else:
-                    growth, lineage = _require_assumption_value(
-                        lookup,
-                        [f"{name}_rev_growth", "rev_growth", "revenue_growth"],
-                        period,
-                    )
-                    used_reviewed_variables.add("rev_growth")
-            else:
-                lineage = {
-                    "source": "step4_structured_assumptions.json",
-                    "field": f"segment_revenues.{name}.{period}_growth",
-                    "requested_period": period,
-                    "case": "p50",
-                    "value": growth,
-                }
-                used_reviewed_variables.add("rev_growth")
             revenue = prev * (1 + growth)
             lineage_key = f"segment:{name}:{period}:growth"
             assumption_lineage[lineage_key] = lineage
@@ -495,14 +582,18 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
 
         ar = (revenue * ar_days / 365.0) if ar_days else 0.0
         inventory = (cogs * inv_days / 365.0) if inv_days else 0.0
-        prepaid_other_ca = revenue * 0.02  # minimal default for Prepaid/Other CA
+        prepaid_other_ca = revenue * inputs.get("prepaid_ca_ratio", 0.0)
         ap_bs = (cogs * ap_days_val / 365.0) if ap_days_val else (revenue * ap_ratio)
         accrued_liab = revenue * accrued_ratio
         deferred_rev = revenue * deferred_rev_ratio
         other_ncl = revenue * other_ncl_ratio
 
-        # Paid-in Capital (constant)
-        paid_in_capital = inputs["equity"] * 0.5  # heuristic split; overwritten if Step 4 provides
+        # Paid-in capital is constant when explicitly provided; otherwise equity
+        # rolls through retained earnings without inventing a 50/50 split.
+        if "paid_in_capital" in inputs:
+            paid_in_capital = inputs["paid_in_capital"]
+        else:
+            paid_in_capital = inputs["equity"] * inputs.get("paid_in_capital_ratio", 0.0)
         # Retained Earnings
         retained_earnings = prev_equity - paid_in_capital + net_income - dividends if prev_equity else net_income - dividends
         other_equity = 0.0  # OCI / Minority Interest placeholder

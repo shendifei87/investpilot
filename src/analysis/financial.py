@@ -1,28 +1,36 @@
+from __future__ import annotations
+
 import warnings
 import pandas as pd
 import numpy as np
 
-# Field name aliases: yfinance (English) → akshare (Chinese) → tushare (English)
+# Field name aliases: yfinance (English) → akshare (Chinese) → tushare/SEC/lowercase
 _INCOME_ALIASES = {
-    "Total Revenue": ("营业总收入", "营业收入", "total_revenue"),
-    "Gross Profit": ("毛利润",),
-    "Operating Income": ("营业利润", "operate_profit"),
-    "Net Income": ("净利润", "n_income", "n_income_attr_p"),
+    "Total Revenue": ("营业总收入", "营业收入", "total_revenue", "revenue"),
+    "Gross Profit": ("毛利润", "gross_profit"),
+    "Operating Income": ("营业利润", "operate_profit", "operating_income", "ebit"),
+    "Net Income": ("净利润", "net_income", "n_income", "n_income_attr_p"),
     "Net Income from Continuing Operations": ("持续经营净利润",),
     "Interest Expense": ("利息费用", "利息支出", "int_exp"),
     "Tax Provision": ("所得税费用", "income_tax"),
+    "Diluted EPS": ("摊薄每股收益", "基本每股收益", "eps", "dt_eps", "diluted_eps"),
 }
 
 _BALANCE_ALIASES = {
     "Total Stockholder Equity": ("所有者权益合计", "股东权益合计", "total_hldr_eqy_exc_min_int"),
-    "Total Debt": ("负债合计", "总负债", "total_liab"),
+    # Total Debt means interest-bearing debt only. Do not alias total_liab/负债合计 here.
+    "Total Debt": ("有息负债合计", "total_debt", "debt"),
+    "Total Liabilities": ("负债合计", "总负债", "total_liab", "liabilities"),
     "Total Current Assets": ("流动资产合计", "total_cur_assets"),
     "Total Current Liabilities": ("流动负债合计", "total_cur_liab"),
     "Total Assets": ("资产总计", "总资产", "total_assets"),
-    "Cash And Cash Equivalents": ("货币资金", "monetary_capital"),
-    "Accounts Receivable": ("应收账款", "accounts_recev"),
+    "Cash And Cash Equivalents": ("货币资金", "money_cap", "monetary_capital", "monetary_cap", "cash", "total_cash"),
+    "Short Term Investments": ("短期投资", "交易性金融资产", "trad_asset", "short_term_investments", "st_invest"),
+    "Accounts Receivable": ("应收账款", "accounts_receiv", "accounts_recev"),
     "Short Term Debt": ("短期借款", "st_borr"),
     "Long Term Debt": ("长期借款", "lt_borr"),
+    "Bonds Payable": ("应付债券", "bond_payable"),
+    "Current Portion of Long Term Debt": ("一年内到期的非流动负债", "non_cur_liab_due_1y", "current_portion_debt"),
 }
 
 _CASHFLOW_ALIASES = {
@@ -59,12 +67,15 @@ def _get_series(df, field, aliases, warnings_list=None):
     if not isinstance(df, pd.DataFrame) or df.empty:
         return None
 
-    # yfinance: financial items as index, dates as columns
-    if field in df.index:
-        return _sort_series_by_date(pd.to_numeric(df.loc[field], errors="coerce"))
-
-    # akshare: financial items as columns, dates in a column
     all_names = (field,) + aliases
+
+    # yfinance: financial items as index rows. Some local CSVs keep the source
+    # field names as rows, so aliases must be checked here too.
+    for name in all_names:
+        if name in df.index:
+            return _sort_series_by_date(pd.to_numeric(df.loc[name], errors="coerce"))
+
+    # akshare/tushare: financial items as columns, dates in a column
     for name in all_names:
         if name in df.columns:
             s = pd.to_numeric(df[name], errors="coerce")
@@ -78,6 +89,115 @@ def _get_series(df, field, aliases, warnings_list=None):
     if warnings_list is not None:
         warnings_list.append(msg)
     return None
+
+
+def _latest_value(series: pd.Series):
+    if series is None:
+        return None
+    clean = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if clean.empty:
+        return None
+    return float(clean.iloc[-1])
+
+
+def _is_date_like_index(series: pd.Series) -> bool:
+    if series is None or series.empty:
+        return False
+    try:
+        idx = pd.to_datetime(series.index, errors="coerce")
+    except (TypeError, ValueError):
+        return False
+    return not idx.isna().all()
+
+
+def _is_year_end(ts: pd.Timestamp) -> bool:
+    return int(ts.month) == 12 and int(ts.day) == 31
+
+
+def _latest_ttm_from_cumulative_ytd(series: pd.Series) -> tuple[float | None, str]:
+    """Return latest TTM value from annual/YTD cumulative statement data.
+
+    Tushare quarterly income-statement fields are cumulative year-to-date. For a
+    latest non-year-end period, TTM = latest YTD + prior FY - prior-year same YTD.
+    With annual-only data, this correctly falls back to the latest fiscal year.
+    """
+    if series is None:
+        return None, "missing"
+    clean = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if clean.empty:
+        return None, "missing"
+
+    if not _is_date_like_index(clean):
+        return float(clean.iloc[-1]), "latest_period_no_dates"
+
+    clean = _sort_series_by_date(clean).dropna()
+    latest_date = pd.Timestamp(clean.index[-1])
+    latest_value = float(clean.iloc[-1])
+
+    if _is_year_end(latest_date):
+        return latest_value, "latest_annual"
+
+    prior_annual_dates = [
+        pd.Timestamp(d) for d in clean.index
+        if pd.Timestamp(d) < latest_date and _is_year_end(pd.Timestamp(d))
+    ]
+    prior_same_period = pd.Timestamp(
+        year=latest_date.year - 1,
+        month=latest_date.month,
+        day=latest_date.day,
+    )
+
+    if prior_annual_dates and prior_same_period in clean.index:
+        prior_annual_date = max(prior_annual_dates)
+        ttm = latest_value + float(clean.loc[prior_annual_date]) - float(clean.loc[prior_same_period])
+        return ttm, "ytd_plus_prior_fy_minus_prior_ytd"
+
+    # Last resort for true discrete quarterly series. Only use this when the
+    # last four observations span roughly a year; otherwise prefer latest annual.
+    if len(clean) >= 4:
+        last_four = clean.iloc[-4:]
+        span_days = (pd.Timestamp(last_four.index[-1]) - pd.Timestamp(last_four.index[0])).days
+        if 250 <= span_days <= 400:
+            return float(last_four.sum()), "sum_last_four_periods"
+
+    if prior_annual_dates:
+        prior_annual_date = max(prior_annual_dates)
+        return float(clean.loc[prior_annual_date]), "latest_available_annual"
+
+    return latest_value, "latest_period_fallback"
+
+
+def _interest_bearing_debt_series(balance: pd.DataFrame, warnings_list=None) -> pd.Series | None:
+    """Interest-bearing debt by period. Never falls back to total liabilities."""
+    direct = _get_series(balance, "Total Debt", _BALANCE_ALIASES.get("Total Debt", ()))
+    if direct is not None and not direct.dropna().empty:
+        return pd.to_numeric(direct, errors="coerce")
+
+    components = []
+    for field in ["Short Term Debt", "Long Term Debt", "Bonds Payable", "Current Portion of Long Term Debt"]:
+        series = _get_series(balance, field, _BALANCE_ALIASES.get(field, ()))
+        if series is not None and not series.dropna().empty:
+            components.append(pd.to_numeric(series, errors="coerce"))
+
+    if components:
+        total = components[0].copy().fillna(0)
+        for series in components[1:]:
+            total = total.add(series.fillna(0), fill_value=0)
+        return _sort_series_by_date(total)
+
+    if warnings_list is not None:
+        warnings_list.append(
+            "Interest-bearing debt fields not found; using 0 debt for EV instead of total liabilities."
+        )
+    return None
+
+
+def _latest_interest_bearing_debt(balance: pd.DataFrame, warnings_list=None) -> float | None:
+    """Latest interest-bearing debt. Never falls back to total liabilities."""
+    series = _interest_bearing_debt_series(balance, warnings_list)
+    if series is not None:
+        return _latest_value(series)
+    return 0.0
 
 
 def calc_financial_ratios(income: pd.DataFrame, balance: pd.DataFrame) -> dict:
@@ -101,13 +221,13 @@ def calc_financial_ratios(income: pd.DataFrame, balance: pd.DataFrame) -> dict:
 
     if isinstance(balance, pd.DataFrame) and not balance.empty:
         equity = _get_series(balance, "Total Stockholder Equity", _BALANCE_ALIASES.get("Total Stockholder Equity", ()), w)
-        debt = _get_series(balance, "Total Debt", _BALANCE_ALIASES.get("Total Debt", ()), w)
         current_assets = _get_series(balance, "Total Current Assets", _BALANCE_ALIASES.get("Total Current Assets", ()), w)
         current_liab = _get_series(balance, "Total Current Liabilities", _BALANCE_ALIASES.get("Total Current Liabilities", ()), w)
 
         if equity is not None:
-            if debt is not None:
-                ratios["debt_to_equity"] = (debt / equity).to_dict()
+            debt_series = _interest_bearing_debt_series(balance, w)
+            if debt_series is not None:
+                ratios["debt_to_equity"] = (debt_series / equity).to_dict()
             if current_assets is not None and current_liab is not None:
                 ratios["current_ratio"] = (current_assets / current_liab).to_dict()
 
@@ -402,7 +522,16 @@ def calc_pe_trailing(price: float, income: pd.DataFrame, shares: float) -> dict:
             "error": "Net Income not found in income statement",
         }
 
-    latest_ni = float(ni.dropna().iloc[-1])
+    latest_ni, ttm_method = _latest_ttm_from_cumulative_ytd(ni)
+    if latest_ni is None:
+        return {
+            "pe": None,
+            "price": price,
+            "eps": None,
+            "label": "TTM",
+            "valid": False,
+            "error": "No usable Net Income values in income statement",
+        }
     if shares is None or shares <= 0:
         return {
             "pe": None,
@@ -418,6 +547,7 @@ def calc_pe_trailing(price: float, income: pd.DataFrame, shares: float) -> dict:
     result["net_income"] = latest_ni
     result["shares"] = shares
     result["eps_ttm"] = eps_ttm
+    result["ttm_method"] = ttm_method
     return result
 
 
@@ -658,7 +788,9 @@ def calc_ps_from_statements(
     if rev is None or rev.dropna().empty:
         return {"ps": None, "valid": False, "error": "Revenue not found in income statement"}
 
-    latest_rev = float(rev.dropna().iloc[-1])
+    latest_rev, ttm_method = _latest_ttm_from_cumulative_ytd(rev)
+    if latest_rev is None:
+        return {"ps": None, "valid": False, "error": "No usable Revenue values in income statement"}
     if shares is None or shares <= 0:
         return {"ps": None, "valid": False, "error": f"Shares outstanding invalid: {shares}"}
 
@@ -666,6 +798,7 @@ def calc_ps_from_statements(
     result = calc_ps(price, rps, label=label)
     result["total_revenue"] = latest_rev
     result["shares"] = shares
+    result["ttm_method"] = ttm_method
     return result
 
 
@@ -729,6 +862,7 @@ def calc_all_valuation_ratios(
     cashflow: pd.DataFrame = None,
     eps_estimate: float = None,
     forward_label: str = "T+1",
+    ebitda_multiplier: float = 1.2,
 ) -> dict:
     """Calculate all key valuation ratios from raw financial data in one call.
 
@@ -784,6 +918,7 @@ def calc_all_valuation_ratios(
 
         # EBITDA: Operating Income + D&A (from cashflow)
         ebitda = None
+        ebitda_approximation_used = False
         if cashflow is not None:
             da_series = _get_series(
                 cashflow, "Depreciation And Amortization",
@@ -794,25 +929,20 @@ def calc_all_valuation_ratios(
                 ebitda = latest_op + latest_da
 
         if ebitda is None:
-            # Fallback: approximate EBITDA with 1.2x multiplier
-            ebitda = latest_op * 1.2
+            # Fallback: approximate EBITDA with configurable multiplier
+            ebitda = latest_op * ebitda_multiplier
+            ebitda_approximation_used = True
             warnings_list.append(
-                "D&A not found in cashflow statement; using Operating Income × 1.2 "
+                f"D&A not found in cashflow statement; using Operating Income × {ebitda_multiplier} "
                 "approximation for EBITDA. Pass cashflow= for accurate calculation."
             )
 
-        # Debt: try Short Term + Long Term first, fallback to Total Debt
-        std_series = _get_series(balance, "Short Term Debt", _BALANCE_ALIASES.get("Short Term Debt", ()))
-        ltd_series = _get_series(balance, "Long Term Debt", _BALANCE_ALIASES.get("Long Term Debt", ()))
-        if std_series is not None and ltd_series is not None:
-            latest_std = float(std_series.dropna().iloc[-1]) if not std_series.dropna().empty else 0
-            latest_ltd = float(ltd_series.dropna().iloc[-1]) if not ltd_series.dropna().empty else 0
-            latest_debt = latest_std + latest_ltd
-        else:
-            debt_series = _get_series(balance, "Total Debt", _BALANCE_ALIASES.get("Total Debt", ()))
-            latest_debt = float(debt_series.dropna().iloc[-1]) if debt_series is not None and not debt_series.dropna().empty else 0
+        # Debt: interest-bearing debt only. Never use total liabilities as a debt proxy.
+        latest_debt = _latest_interest_bearing_debt(balance, warnings_list)
+        if latest_debt is None:
+            latest_debt = 0.0
 
-        # Cash: try Cash & Cash Equivalents first, fallback to CA - CL proxy
+        # Cash: use real cash/cash-equivalent fields. CA-CL is working capital, not cash.
         cash_series = _get_series(
             balance, "Cash And Cash Equivalents",
             _BALANCE_ALIASES.get("Cash And Cash Equivalents", ()),
@@ -820,20 +950,23 @@ def calc_all_valuation_ratios(
         if cash_series is not None and not cash_series.dropna().empty:
             latest_cash = float(cash_series.dropna().iloc[-1])
         else:
-            ca_series = _get_series(balance, "Total Current Assets", _BALANCE_ALIASES.get("Total Current Assets", ()))
-            cl_series = _get_series(balance, "Total Current Liabilities", _BALANCE_ALIASES.get("Total Current Liabilities", ()))
-            latest_cash = 0
-            if ca_series is not None and cl_series is not None:
-                latest_ca = float(ca_series.dropna().iloc[-1]) if not ca_series.dropna().empty else 0
-                latest_cl = float(cl_series.dropna().iloc[-1]) if not cl_series.dropna().empty else 0
-                latest_cash = max(0, latest_ca - latest_cl)
-            warnings_list.append(
-                "Cash & Cash Equivalents not found in balance sheet; "
-                "using Current Assets - Current Liabilities as proxy. "
-                "Data quality may be reduced."
+            sti_series = _get_series(
+                balance, "Short Term Investments",
+                _BALANCE_ALIASES.get("Short Term Investments", ()),
             )
+            if sti_series is not None and not sti_series.dropna().empty:
+                latest_cash = float(sti_series.dropna().iloc[-1])
+                warnings_list.append(
+                    "Cash & Cash Equivalents not found; using Short Term Investments as proxy."
+                )
+            else:
+                latest_cash = 0.0
+                warnings_list.append(
+                    "Cash & Cash Equivalents not found in balance sheet; "
+                    "using 0 cash for EV instead of Current Assets - Current Liabilities proxy."
+                )
 
-        ev_label = "TTM (from source data)" if ebitda != latest_op * 1.2 else "TTM (approx)"
+        ev_label = "TTM (approx)" if ebitda_approximation_used else "TTM (from source data)"
         ev_res = calc_ev_ebitda(market_cap, latest_debt, latest_cash, ebitda, label=ev_label)
         results["ev_ebitda"] = ev_res
         if not ev_res.get("valid"):
@@ -1013,5 +1146,6 @@ def quarterly_arithmetic_check(
         "growth_gap_vs_full_year": growth_gap,
         "q1_share_last_year": q1_share_last_year,
         "feasibility": feasibility,
+        "acceleration_vs_q1": acceleration,
         "acceleration_note": acceleration_note,
     }

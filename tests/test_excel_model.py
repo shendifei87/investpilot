@@ -883,9 +883,8 @@ class TestNoContributionFallback:
             ]
             save_structured_assumptions(ws, data)
             _write_reviewed_lock(ws)
-            generate_financial_model_artifacts(ws, ticker="NOFALLBACK")
             with pytest.raises((ValueError, RuntimeError), match="base_value|explicit|Step 4|driver"):
-                generate_excel_model(ws, ticker="NOFALLBACK")
+                generate_financial_model_artifacts(ws, ticker="NOFALLBACK")
 
 
 class TestOpExFormulaLink:
