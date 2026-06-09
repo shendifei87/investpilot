@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { workspacePath, safePath } from "../services/workspace.js";
 
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
 const files = new Hono();
 
 /**
@@ -28,6 +30,11 @@ files.get("/api/research/:ticker/image/:name", (c) => {
     path.extname(imgPath).toLowerCase() !== ".png"
   ) {
     return c.json({ error: "Not found" }, 404);
+  }
+
+  const stat = fs.statSync(imgPath);
+  if (stat.size > MAX_FILE_SIZE) {
+    return c.json({ error: "File too large" }, 413);
   }
 
   const data = fs.readFileSync(imgPath);
@@ -60,6 +67,11 @@ files.get("/api/research/:ticker/report/:name", (c) => {
     path.extname(filePath).toLowerCase() !== ".html"
   ) {
     return c.json({ error: "Not found" }, 404);
+  }
+
+  const stat = fs.statSync(filePath);
+  if (stat.size > MAX_FILE_SIZE) {
+    return c.json({ error: "File too large" }, 413);
   }
 
   const data = fs.readFileSync(filePath);

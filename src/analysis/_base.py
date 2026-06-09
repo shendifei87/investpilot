@@ -38,6 +38,10 @@ class WorkspaceStateBase:
     Subclasses must set class attributes:
         _state_file: str — JSON filename (e.g. "thesis.json")
         _default_state: dict | list — default value when file is missing
+
+    NOTE: _default_state is a class-level mutable. __init__ deep-copies it
+    per instance to avoid cross-instance shared-state bugs. Subclasses must
+    NOT mutate _default_state directly after class definition.
     """
 
     _state_file: str

@@ -144,7 +144,7 @@ class TestResearchWorkflow:
         assert snap["steps"]["6"]["status"] == "not_started"
 
     def test_obsolete_in_progress_step4_migrated(self, tmp_path):
-        """Old v1 state with step 4 in_progress should be cleaned up."""
+        """Old v1 state with step 4 in_progress should be preserved (Step 4 is current)."""
         ws = tmp_path / "workspaces" / "LEGACY"
         ws.mkdir(parents=True, exist_ok=True)
         (ws / "research_workflow.json").write_text(json.dumps({
@@ -161,10 +161,10 @@ class TestResearchWorkflow:
         with patch("src.analysis._base.WORKSPACES_DIR", tmp_path / "workspaces"):
             wf = ResearchWorkflow("LEGACY")
         snap = wf.snapshot()
-        # Old "4" key should be removed; new flat 0-9 keys should exist
-        assert "4" not in snap["steps"] or snap["steps"]["4"]["status"] == "not_started"
-        # All new steps 4-9 should be present as not_started
-        for s in ("4", "5", "6", "7", "8", "9"):
+        # Step 4 is a current step — its in_progress state must be preserved
+        assert snap["steps"]["4"]["status"] == "in_progress"
+        # All new steps 0-9 should be present
+        for s in ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"):
             assert s in snap["steps"]
 
 

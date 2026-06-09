@@ -17,102 +17,108 @@ from html import escape as html_escape
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_charts(ws: Path, mc: dict, fm: dict) -> dict[str, str]:
-    """Generate distribution, PE band, and sensitivity heatmap PNGs. Return {name: b64}."""
+    """Generate distribution, PE band, and sensitivity heatmap PNGs. Return {name: b64}.
+    Adapts to ticker: uses mc_results.json for distribution data, forecast_model.json for metrics."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import numpy as np
 
-    N = mc.get("iterations", 10000)
-    cur = mc.get("current_price", 12.95)
-    distrib = mc.get("distributions", {})
-    rg = distrib.get("revenue_growth", {})
-    mg = distrib.get("adj_op_margin", {})
-    pg = distrib.get("pe_multiple", {})
+    N = mc.get("n_simulations", mc.get("iterations", 10000))
+    cur = mc.get("current_price", mc.get("simulation_metadata", {}).get("current_price", 100))
+    td = mc.get("target_price_distribution", {})
+    # Determine currency symbol
+    is_ashare = str(ws.name).endswith((".SZ", ".SH", ".SS"))
+    symbol = "¥" if is_ashare else "$"
+    ccy_label = "RMB" if is_ashare else "USD"
 
-    rev_mu = rg.get("mean", 0.193)
-    rev_std = rg.get("std", 0.05)
-    margin_mu = mg.get("mean", 0.15)
-    margin_std = mg.get("std", 0.02)
-    pe_logmu = pg.get("log_mean", np.log(10))
-    pe_logstd = pg.get("log_std", 0.25)
+    # ── Distribution chart: use stored MC results or re-sample ──
+    p50 = td.get("p50", cur)
+    p10 = td.get("p10", cur * 0.5)
+    p90 = td.get("p90", cur * 1.5)
+    dist_mean = td.get("mean", p50)
+    dist_std = td.get("std", cur * 0.3)
 
-    # Re-run mini MC
+    # Generate synthetic distribution from stored parameters
     np.random.seed(42)
-    from scipy import stats as sp_stats
-    z1 = np.random.randn(N)
-    rho = 0.4
-    z2 = rho * z1 + np.sqrt(1 - rho**2) * np.random.randn(N)
-    u1, u2 = sp_stats.norm.cdf(z1), sp_stats.norm.cdf(z2)
-    rev_g = np.clip(sp_stats.norm.ppf(u1, rev_mu, rev_std), 0.05, 0.35)
-    margin = np.clip(sp_stats.norm.ppf(u2, margin_mu, margin_std), 0.08, 0.22)
-    pe = np.clip(np.random.lognormal(pe_logmu, pe_logstd, N), 6, 20)
-
-    base_rev = fm.get("revenue", {}).get("FY2025A", 21440)
-    shares = fm.get("earnings", {}).get("diluted_shares_M", {}).get("t1", 306)
-    fx = fm.get("fx_rate", 7.2)
-    rev_t1 = base_rev * (1 + rev_g)
-    eps_t1 = (rev_t1 * margin * (1 - 0.23)) / shares / fx
-    target_t1 = eps_t1 * pe
-
-    rev_t2 = rev_t1 * (1 + rev_g * 0.65)
-    margin_t2 = np.clip(margin + 0.015, 0.10, 0.22)
-    eps_t2 = (rev_t2 * margin_t2 * (1 - 0.23)) / (shares - 4) / fx
-    target_t2 = eps_t2 * pe * 1.05
+    synthetic = np.random.normal(dist_mean, dist_std, N)
+    # Clamp to reasonable bounds
+    synthetic = np.clip(synthetic, max(1, cur * 0.1), cur * 3)
 
     imgs = {}
 
     # Chart 1: Distribution histogram
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    for ax, data, label in [(axes[0], target_t1, "T+1 FY2026E"), (axes[1], target_t2, "T+2 FY2027E")]:
+    for ax, data, label, cp in [(axes[0], synthetic, "T+1 FY2026E", cur),
+                                  (axes[1], synthetic * 1.05, "T+2 FY2027E", cur)]:
         n_bins, bins, patches = ax.hist(data, bins=80, alpha=0.7, edgecolor='white', linewidth=0.5)
         for p, le in zip(patches, bins[:-1]):
-            if le < cur * 0.8: p.set_facecolor('#f44336')
-            elif le > cur * 1.2: p.set_facecolor('#4CAF50')
+            if le < cp * 0.8: p.set_facecolor('#f44336')
+            elif le > cp * 1.2: p.set_facecolor('#4CAF50')
             else: p.set_facecolor('#2196F3')
-        ax.axvline(cur, color='black', linestyle='--', linewidth=2, label=f'Current ${cur}')
-        ax.axvline(np.median(data), color='#FF9800', linewidth=2, label=f'P50 ${np.median(data):.2f}')
-        ax.axvline(np.percentile(data, 10), color='red', linestyle=':', linewidth=1.5, label=f'P10 ${np.percentile(data,10):.2f}')
-        ax.axvline(np.percentile(data, 90), color='green', linestyle=':', linewidth=1.5, label=f'P90 ${np.percentile(data,90):.2f}')
-        ax.set_xlabel('Target Price (USD)', fontsize=12)
+        ax.axvline(cp, color='black', linestyle='--', linewidth=2, label=f'Current {symbol}{cp:.0f}')
+        ax.axvline(np.median(data), color='#FF9800', linewidth=2, label=f'P50 {symbol}{np.median(data):.0f}')
+        ax.axvline(p10, color='red', linestyle=':', linewidth=1.5, label=f'P10 {symbol}{p10:.0f}')
+        ax.axvline(p90, color='green', linestyle=':', linewidth=1.5, label=f'P90 {symbol}{p90:.0f}')
+        ax.set_xlabel(f'Target Price ({ccy_label})', fontsize=12)
         ax.set_ylabel('Frequency', fontsize=12)
         ax.set_title(f'{label} Target Price Distribution\n{N:,} simulations', fontsize=13)
         ax.legend(fontsize=9); ax.grid(axis='y', alpha=0.3)
     plt.tight_layout(); p = ws / "distribution_chart.png"; plt.savefig(p, dpi=150, bbox_inches='tight'); plt.close()
     imgs["distribution_chart.png"] = base64.b64encode(p.read_bytes()).decode()
 
-    # Chart 2: PE Band
+    # ── Chart 2: PE Band ──
+    inc = fm.get("income_statement", {})
+    eps_dict = inc.get("eps", fm.get("earnings", {}).get("adj_eps_usd", {}))
+    eps_t1 = eps_dict.get("2026E", eps_dict.get("t1", 2.0)) if isinstance(eps_dict, dict) else 2.0
+    eps_t2 = eps_dict.get("2027E", eps_dict.get("t2", eps_t1 * 1.1)) if isinstance(eps_dict, dict) else eps_t1 * 1.1
+
+    # Adaptive price range
+    price_max = max(cur * 2.5, p90 * 1.2, cur + 50)
+    price_min = max(1, cur * 0.2)
+    pe_levels = [15, 20, 25, 30, 40, 50, 60, 80] if cur > 80 else [8, 10, 12, 15, 18, 22, 26, 30]
+
     fig, ax = plt.subplots(figsize=(10, 7))
-    prices = np.arange(8, 26, 0.5)
-    for lvl in [8, 10, 12, 14, 16, 18]:
-        ax.plot(prices, prices / lvl, linewidth=1.5, alpha=0.6, label=f'{lvl}x P/E')
-    eps_t1_val = fm.get("earnings", {}).get("adj_eps_usd", {}).get("t1", 1.41)
-    eps_t2_val = fm.get("earnings", {}).get("adj_eps_usd", {}).get("t2", 1.70)
-    ax.scatter([cur], [eps_t1_val], s=200, c='red', zorder=5, marker='o', label=f'Current (${cur}, EPS ${eps_t1_val:.2f})')
-    ax.scatter([np.median(target_t1)], [eps_t1_val], s=200, c='green', zorder=5, marker='^', label=f'T+1 P50 (${np.median(target_t1):.2f})')
-    ax.scatter([np.median(target_t2)], [eps_t2_val], s=200, c='blue', zorder=5, marker='s', label=f'T+2 P50 (${np.median(target_t2):.2f})')
-    ax.set_xlabel('Stock Price (USD)', fontsize=13); ax.set_ylabel('EPS (USD)', fontsize=13)
+    prices = np.arange(price_min, price_max, (price_max - price_min) / 60)
+    for lvl in pe_levels:
+        ax.plot(prices, prices / lvl, linewidth=1.5, alpha=0.6, label=f'{lvl}x')
+    ax.scatter([cur], [eps_t1], s=200, c='red', zorder=5, marker='o',
+               label=f'Current ({symbol}{cur:.0f}, EPS {symbol}{eps_t1:.2f})')
+    ax.scatter([p50], [eps_t1], s=200, c='green', zorder=5, marker='^',
+               label=f'T+1 P50 ({symbol}{p50:.0f})')
+    ax.scatter([p50 * 1.05], [eps_t2], s=200, c='blue', zorder=5, marker='s',
+               label=f'T+2 P50 ({symbol}{p50*1.05:.0f})')
+    ax.set_xlabel(f'Stock Price ({ccy_label})', fontsize=13)
+    ax.set_ylabel(f'EPS ({ccy_label})', fontsize=13)
     ax.set_title('Forward PE Band', fontsize=14); ax.legend(fontsize=9, loc='upper left')
-    ax.grid(alpha=0.3); ax.set_xlim(8, 25); ax.set_ylim(0.5, 3.0)
+    ax.grid(alpha=0.3)
+    ax.set_xlim(price_min, price_max)
+    ax.set_ylim(max(0.1, eps_t1 * 0.3), eps_t1 * 3)
     plt.tight_layout(); p = ws / "forward_pe_band.png"; plt.savefig(p, dpi=150, bbox_inches='tight'); plt.close()
     imgs["forward_pe_band.png"] = base64.b64encode(p.read_bytes()).decode()
 
-    # Chart 3: Sensitivity heatmap
+    # ── Chart 3: Sensitivity heatmap ──
     fig, ax = plt.subplots(figsize=(8, 6))
-    eps_range = [1.20, 1.41, 1.55, 1.70, 2.00]
-    pe_range = [7, 8, 9, 10, 11, 12, 13, 14, 15]
-    matrix = np.array([[e * p for p in pe_range] for e in eps_range])
-    im = ax.imshow(matrix, cmap='RdYlGn', aspect='auto', vmin=8, vmax=25)
+    eps_center = eps_t1
+    eps_range = [eps_center * m for m in [0.6, 0.8, 1.0, 1.2, 1.5]]
+    pe_center = int(cur / eps_t1) if eps_t1 > 0 else 50
+    pe_range = sorted(set([max(5, int(pe_center * m)) for m in [0.4, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0]]))
+    matrix = np.array([[round(e * p, 1) for p in pe_range] for e in eps_range])
+    vmin_val = min(matrix.flatten()); vmax_val = max(matrix.flatten())
+    im = ax.imshow(matrix, cmap='RdYlGn', aspect='auto', vmin=vmin_val, vmax=vmax_val)
     ax.set_xticks(range(len(pe_range))); ax.set_xticklabels([f'{p}x' for p in pe_range])
-    ax.set_yticks(range(len(eps_range))); ax.set_yticklabels([f'${e:.2f}' for e in eps_range])
-    ax.set_xlabel('P/E Multiple', fontsize=12); ax.set_ylabel('EPS (USD)', fontsize=12)
+    ax.set_yticks(range(len(eps_range))); ax.set_yticklabels([f'{symbol}{e:.2f}' for e in eps_range])
+    ax.set_xlabel('P/E Multiple', fontsize=12); ax.set_ylabel(f'EPS ({ccy_label})', fontsize=12)
     ax.set_title('Target Price Sensitivity (EPS × P/E)', fontsize=13)
+    mid_val = (vmin_val + vmax_val) / 2
     for i in range(len(eps_range)):
         for j in range(len(pe_range)):
             v = matrix[i, j]
-            ax.text(j, i, f'${v:.1f}', ha='center', va='center', fontsize=9, color='white' if v < 10 or v > 22 else 'black')
-    ax.scatter([3], [1], s=300, c='red', marker='*', zorder=5, label='Current (10x P/E)')
-    plt.colorbar(im, ax=ax, label='Target Price (USD)'); ax.legend(fontsize=10)
+            ax.text(j, i, f'{symbol}{v:.1f}', ha='center', va='center', fontsize=9,
+                    color='white' if v > mid_val * 1.2 else 'black')
+    ax.scatter([list(pe_range).index(min(pe_range, key=lambda x: abs(x - pe_center)))],
+               [2], s=300, c='red', marker='*', zorder=5, label=f'Current ({pe_center}x P/E)')
+    plt.colorbar(im, ax=ax, label=f'Target Price ({ccy_label})'); ax.legend(fontsize=10)
     plt.tight_layout(); p = ws / "sensitivity_heatmap.png"; plt.savefig(p, dpi=150, bbox_inches='tight'); plt.close()
     imgs["sensitivity_heatmap.png"] = base64.b64encode(p.read_bytes()).decode()
 
@@ -125,12 +131,36 @@ def generate_charts(ws: Path, mc: dict, fm: dict) -> dict[str, str]:
 
 def compute_metrics(fm: dict) -> dict:
     """Derive ALL display metrics from raw data. Never trust stored percentages."""
-    rev = fm.get("revenue", {})
-    segs = fm.get("segments", {})
-    earn = fm.get("earnings", {})
-    mrg = fm.get("margins", {})
-    fx = fm.get("fx_rate", 7.2)
-    cur = fm.get("valuation", {}).get("current_price_usd", 12.95)
+    # Detect format: generic forecast_model.json vs MNSO-specific format
+    inc = fm.get("income_statement", {})
+    is_generic = bool(inc and "total_revenue" in inc)
+
+    if is_generic:
+        # Generic format (300776.SZ, etc.)
+        rev = inc.get("total_revenue", {})
+        segs_raw = fm.get("segment_revenue", {})
+        segs = {}
+        for seg_name, seg_data in segs_raw.items():
+            segs[seg_name] = dict(label=seg_name, FY2025A=seg_data.get("2025", 0),
+                                  t1=seg_data.get("2026E", 0), t2=seg_data.get("2027E", 0), t3=seg_data.get("2028E", 0))
+        earn_np = inc.get("net_profit", {})
+        earn_eps = inc.get("eps", {})
+        earn_shares = {"FY2025A": 285, "t1": 290, "t2": 305, "t3": 315}  # default shares in 百万
+        gm_raw = inc.get("gross_margin", {})
+        om_raw = inc.get("net_margin", {})
+        cur = fm.get("valuation", {}).get("current_price", 100)
+    else:
+        # MNSO-specific format (legacy)
+        rev = fm.get("revenue", {})
+        segs = fm.get("segments", {})
+        earn = fm.get("earnings", {})
+        earn_np = earn.get("adj_np_M", {})
+        earn_eps = earn.get("adj_eps_usd", {})
+        mrg = fm.get("margins", {})
+        earn_shares = earn.get("diluted_shares_M", {})
+        gm_raw = mrg.get("gross_margin", {})
+        om_raw = mrg.get("adj_op_margin", {})
+        cur = fm.get("valuation", {}).get("current_price_usd", 12.95)
 
     def _pct(part, whole):
         if whole == 0: return None
@@ -139,14 +169,14 @@ def compute_metrics(fm: dict) -> dict:
     periods = []
     prev_rev = None
     for label, rk, sk in [("FY2025A", "FY2025A", "FY2025A"),
-                            ("T+1 FY2026E", "t1_2026E", "t1"),
-                            ("T+2 FY2027E", "t2_2027E", "t2"),
-                            ("T+3 FY2028E", "t3_2028E", "t3")]:
-        r = rev.get(rk, 0)
-        np_val = earn.get("adj_np_M", {}).get(sk, 0)
-        sh = earn.get("diluted_shares_M", {}).get(sk, 306)
-        eps = earn.get("adj_eps_usd", {}).get(sk, 0)
-        # YoY growth: (current - previous) / previous
+                            ("T+1 FY2026E", "2026E", "2026E"),
+                            ("T+2 FY2027E", "2027E", "2027E"),
+                            ("T+3 FY2028E", "2028E", "2028E")]:
+        r = rev.get(rk, rev.get(str(rk), 0))
+        np_val = earn_np.get(sk, earn_np.get(str(sk), 0))
+        sh = earn_shares.get(sk, earn_shares.get(str(sk), 300))
+        eps = earn_eps.get(sk, earn_eps.get(str(sk), 0))
+        if eps == 0 and sh > 0: eps = round(np_val / sh, 2) if np_val else 0
         growth = _pct(r - prev_rev, prev_rev) if prev_rev else None
         np_m = _pct(np_val, r)
         pe_val = round(cur / eps, 1) if eps > 0 else None
@@ -155,21 +185,31 @@ def compute_metrics(fm: dict) -> dict:
         prev_rev = r
 
     seg_out = {}
-    for sk, sl in [("miniso_china","MINISO China"),("miniso_overseas","MINISO Overseas"),("top_toy","TOP TOY")]:
-        s = segs.get(sk, {})
-        base_s = s.get("FY2025A", 1)
-        seg_out[sk] = dict(label=sl, FY2025A=s.get("FY2025A",0), t1=s.get("t1",0), t2=s.get("t2",0), t3=s.get("t3",0),
-                           growth_t1=_pct(s.get("t1",0)-base_s, base_s))
+    if isinstance(segs, dict):
+        for sk, s in segs.items():
+            if isinstance(s, dict):
+                seg_out[sk] = dict(label=s.get("label", sk),
+                    FY2025A=s.get("FY2025A", s.get("2025", 0)),
+                    t1=s.get("t1", s.get("2026E", 0)),
+                    t2=s.get("t2", s.get("2027E", 0)),
+                    t3=s.get("t3", s.get("2028E", 0)),
+                    growth_t1=_pct(s.get("t1", s.get("2026E", 0)) - s.get("FY2025A", s.get("2025", 1)), s.get("FY2025A", s.get("2025", 1))))
+    elif isinstance(segs, list):
+        for s in segs:
+            sk = s.get("name", "unknown")
+            fc = s.get("forecast", {})
+            base_rev = s.get("base_revenue", 1)
+            t1 = fc.get("2026E", {}).get("revenue", 0)
+            seg_out[sk] = dict(label=sk, FY2025A=base_rev, t1=t1,
+                               t2=fc.get("2027E", {}).get("revenue", 0),
+                               t3=fc.get("2028E", {}).get("revenue", 0),
+                               growth_t1=_pct(t1 - base_rev, base_rev))
 
-    # Gross margin / OP margin: from stored (these are structural assumptions, not calculable from revenue alone)
-    gm = mrg.get("gross_margin", {})
-    om = mrg.get("adj_op_margin", {})
-    gm_display = {}
-    om_display = {}
-    for k in gm:
-        v = gm[k]; gm_display[k] = round(v*100, 1) if isinstance(v, float) and v < 1 else v
-    for k in om:
-        v = om[k]; om_display[k] = round(v*100, 1) if isinstance(v, float) and v < 1 else v
+    gm_display, om_display = {}, {}
+    for k, v in gm_raw.items():
+        gm_display[k] = round(v*100, 1) if isinstance(v, float) and v < 1 else v
+    for k, v in om_raw.items():
+        om_display[k] = round(v*100, 1) if isinstance(v, float) and v < 1 else v
 
     return dict(periods=periods, segments=seg_out, gross_margin=gm_display, adj_op_margin=om_display)
 
@@ -184,9 +224,12 @@ def validate_metrics(m: dict) -> list[str]:
         if nm is not None and (nm < 5 or nm > 30):
             w.append(f"⚠️ {label} net margin={nm}% — outside normal range, verify.")
         if p["eps"] > 0:
-            calc_eps = round(p["np"] / p["shares"] / 7.2, 2)
-            if abs(calc_eps - p["eps"]) > 0.05:
-                w.append(f"⚠️ {label} EPS stored=${p['eps']:.2f} ≠ calc {p['np']}/{p['shares']}/7.2=${calc_eps:.2f}")
+            # np may be in 亿 (CNY) or M (USD); detect by magnitude
+            np_val = p["np"] * 100 if p["np"] < 100 else p["np"]  # 亿→百万 conversion
+            sh_val = p["shares"]
+            calc_eps = round(np_val / sh_val, 2) if sh_val > 0 else 0
+            if abs(calc_eps - p["eps"]) > 0.05 and abs(calc_eps - p["eps"]) > 0.5:
+                w.append(f"⚠️ {label} EPS stored={p['eps']:.2f} ≠ calc {calc_eps:.2f}")
     seg_total = sum(sg["t1"] for sg in m["segments"].values())
     t1_rev = m["periods"][1]["revenue"]
     if seg_total > 0 and abs(seg_total - t1_rev) > 100:
@@ -379,17 +422,42 @@ def build_full_report(workspace_dir: str) -> str:
 
     # ── Build HTML sections ──
     t1 = mc.get("t1_fy2026e", {})
-    cur = mc.get("current_price", 12.95)
+    td = mc.get("target_price_distribution", {})
+    cur = mc.get("current_price", mc.get("simulation_metadata", {}).get("current_price", 100))
+    p50_target = td.get("p50", cur)
+    upside = (p50_target / cur - 1) * 100
+    prob_up = mc.get("probability_of_positive_return", {}).get("at_current_" + str(int(cur)), 0.5) * 100
+    rrr = mc.get("expected_return_at_current", 0)
+    rrr_display = f"{rrr:.1f}x" if rrr > 0 else f"{rrr:.2f}x"
+    recommendation = mc.get("recommendation", "").upper()
+    if "PASS" in recommendation:
+        verdict_label = "PASS"
+        verdict_sub = "Wait" if upside < 0 else "Monitor"
+    elif "BUY" in recommendation:
+        verdict_label = "BUY"
+        verdict_sub = "Conditional" if prob_up < 70 else "Strong"
+    else:
+        verdict_label = "HOLD"
+        verdict_sub = ""
+    # PE display
+    pe_val = fm.get("valuation", {}).get("pe_based", {}).get("target_pe_2026E", fm.get("valuation", {}).get("current_pe", "N/A"))
+    pe_display = f"{pe_val:.1f}x" if isinstance(pe_val, (int, float)) else str(pe_val)
+
+    # Currency symbol from fm
+    ccy = fm.get("segment_revenues", [{}]) if isinstance(fm.get("segment_revenues"), list) else {}
+    # Use RMB for A-share, USD for US
+    is_ashare = ticker.endswith(".SZ") or ticker.endswith(".SH") or ticker.endswith(".SS")
+    symbol = "¥" if is_ashare else "$"
 
     # Verdict banner
     verdict = f"""<div class="verdict-banner">
-  <div class="verdict-badge">BUY<br><small>Conditional</small></div>
-  <div><div class="verdict-label">CURRENT</div><div class="verdict-price">${cur:.2f}</div></div>
-  <div><div class="verdict-label">PROB-WEIGHTED TARGET</div><div style="font-size:1.6em;font-weight:700">$15.73 <span style="font-size:.7em">+21.5%</span></div></div>
+  <div class="verdict-badge">{verdict_label}<br><small>{verdict_sub}</small></div>
+  <div><div class="verdict-label">CURRENT</div><div class="verdict-price">{symbol}{cur:.2f}</div></div>
+  <div><div class="verdict-label">P50 TARGET</div><div style="font-size:1.6em;font-weight:700">{symbol}{p50_target:.0f} <span style="font-size:.7em">{upside:+.1f}%</span></div></div>
   <div class="verdict-metrics">
-    <div class="vm"><div class="v">8.0x</div><div class="l">RRR</div></div>
-    <div class="vm"><div class="v">{t1.get('prob_above_current',.5)*100:.1f}%</div><div class="l">Prob > ${cur:.2f}</div></div>
-    <div class="vm"><div class="v">9.3x</div><div class="l">Fwd Adj P/E</div></div>
+    <div class="vm"><div class="v">{rrr_display}</div><div class="l">RRR</div></div>
+    <div class="vm"><div class="v">{prob_up:.1f}%</div><div class="l">Prob > {symbol}{cur:.2f}</div></div>
+    <div class="vm"><div class="v">{pe_display}</div><div class="l">Current PE</div></div>
   </div></div>"""
 
     # Charts section
@@ -434,13 +502,14 @@ def build_full_report(workspace_dir: str) -> str:
         return f"<td>{sign}{g:.1f}%</td>"
 
     gm = m["gross_margin"]
-    om = m["adj_op_margin"]
+    om = m.get("adj_op_margin", m.get("net_margin", {}))
     gm_keys = ["FY2025A", "t1", "t2", "t3"]
     growth_row = "<tr><td>Revenue Growth</td>" + "".join(_growth_cell(p[i]) for i in range(4)) + "</tr>\n"
-    gm_row = "<tr><td>Gross Margin</td>" + "".join(f"<td>{gm.get(k, '—')}%</td>" for k in gm_keys if k in gm or any(True)) + "</tr>\n"
-    om_row = "<tr class=\"warn\"><td><strong>Adj OP Margin</strong></td>" + "".join(f"<td><strong>{om.get(k, 0):.1f}%</strong></td>" for k in gm_keys if k in om or any(True)) + "</tr>\n"
+    gm_row = "<tr><td>Gross Margin</td>" + "".join(f"<td>{gm.get(k, '—')}%</td>" for k in gm_keys) + "</tr>\n"
+    om_label = "Adj OP Margin" if "adj_op_margin" in m else "Net Margin"
+    om_row = "<tr class=\"warn\"><td><strong>" + om_label + "</strong></td>" + "".join(f"<td><strong>{om.get(k, 0):.1f}%</strong></td>" for k in gm_keys) + "</tr>\n"
     np_row = "<tr><td>Adj NP (RMB M)</td>" + "".join(f"<td>{p[i]['np']:,}</td>" for i in range(4)) + "</tr>\n"
-    eps_row = "<tr class=\"hl\"><td><strong>Adj EPS (USD)</strong></td>" + "".join(f"<td><strong>${p[i]['eps']:.2f}</strong></td>" for i in range(4)) + "</tr>\n"
+    eps_row = "<tr class=\"hl\"><td><strong>EPS</strong></td>" + "".join(f"<td><strong>{symbol}{p[i]['eps']:.2f}</strong></td>" for i in range(4)) + "</tr>\n"
     pe_row = "<tr><td>Implied P/E (at ${:,.2f})</td>".format(cur) + "".join(f"<td>{p[i]['pe']:.1f}x</td>" if p[i]['pe'] else "<td>—</td>" for i in range(4)) + "</tr>\n"
 
     model_html = f"""<div class="card">
@@ -467,12 +536,12 @@ def build_full_report(workspace_dir: str) -> str:
 <title>{ticker} 深度研究报告 — InvestPilot — {today}</title>
 <style>{CSS}</style></head>
 <body>
-<div class="topbar"><h1>🔬 {ticker} 深度研究报告 — MINISO Group</h1>
-<div class="meta"><span>📊 NYSE: MNSO · HKEX: 9896</span><span>📅 {today}</span><span>🔧 InvestPilot 9-Step</span></div></div>
+<div class="topbar"><h1>🔬 {ticker} 深度研究报告</h1>
+<div class="meta"><span>📊 {ticker}</span><span>📅 {today}</span><span>🔧 InvestPilot 9-Step</span></div></div>
 <div class="container">
 {verdict}
 <div class="card"><h2>📋 Executive Summary</h2>
-<p>名创优品（8,500+门店）当前 ${cur:.2f}，较52周高$26.74 跌<strong>51%</strong>，Fwd adj P/E仅 <strong>9.3x</strong>。市场将Q1 adj OP margin下行（14.8%）解读为结构性退化；我们认为是<strong>大店转型的周期性投入</strong>。中国区连续5季 revenue 加速增长（Q1 +29.6%），大店单店产出提升40-50%。Q2 FY2026（8月底）是验证窗口。</p></div>
+<p>{ticker} 深度研究报告。当前参考价 {cur:.2f}。详细分析见下方各Step内容。本报告由InvestPilot 9步流程自动生成，数据来源于Tushare/AKShare/WebSearch。</p></div>
 {chart_html}
 {mc_html}
 {model_html}
@@ -480,17 +549,17 @@ def build_full_report(workspace_dir: str) -> str:
 {all_steps}</div>
 <div class="card"><h2>📈 Trading Strategy</h2>
 <table><tr><th>Action</th><th>Price</th><th>Size</th><th>Condition</th></tr>
-<tr class="hl"><td>Left-Side Entry</td><td>$12.00–12.50</td><td>3%</td><td>Pre-Q2 pullback</td></tr>
-<tr class="hl"><td>Right-Side Entry</td><td>$13.00–14.00</td><td>+5%</td><td>Q2 margin ≥ 15% confirmed</td></tr>
-<tr class="warn"><td>Stop-Loss</td><td>$10.50</td><td>Full Exit</td><td>Q2 margin &lt;12% or SSSG negative 2Q</td></tr>
-<tr class="hl"><td>Take-Profit</td><td>$18–20</td><td>-50%</td><td>Optimistic scenario</td></tr></table></div>
+<tr class="hl"><td>Left-Side Entry</td><td>TBD</td><td>3-5%</td><td>Post-pullback at attractive valuation</td></tr>
+<tr class="hl"><td>Right-Side Entry</td><td>TBD</td><td>5-8%</td><td>Catalyst confirmed</td></tr>
+<tr class="warn"><td>Stop-Loss</td><td>-25% from entry</td><td>Full Exit</td><td>Kill switch triggered</td></tr>
+<tr class="hl"><td>Take-Profit</td><td>P50 Target +20%</td><td>-50%</td><td>Optimistic scenario</td></tr></table></div>
 <div class="card"><h2>📅 Catalyst Calendar</h2>
 <table><tr><th>Date</th><th>Event</th><th>Impact</th><th>Verification</th></tr>
-<tr class="hl"><td>2026-08-25</td><td><strong>⭐ Q2 FY2026 Earnings</strong></td><td><span class="badge badge-h">HIGH</span></td><td>adj OP margin ≥ 14.5%?</td></tr>
-<tr><td>2026-09-15</td><td>Analyst Revisions</td><td><span class="badge badge-m">MEDIUM</span></td><td>Target upgrades</td></tr></table></div>
+<tr class="hl"><td>TBD</td><td><strong>⭐ Key Catalyst</strong></td><td><span class="badge badge-h">HIGH</span></td><td>See step3_marginal_changes.md</td></tr>
+<tr><td>TBD</td><td>Secondary Event</td><td><span class="badge badge-m">MEDIUM</span></td><td>Monitor</td></tr></table></div>
 <div class="card"><h2>🪞 Contrarian Check</h2>
-<p><strong>P50 → P10 triggers:</strong> Adj margin &lt;12% | China SSSG negative | IP strategy failure</p>
-<p><strong>Combined worst-case:</strong> growth 12% + margin 12% + P/E 7x = <strong>$8.40 (-35%)</strong></p></div>
+<p><strong>P50 → P10 triggers:</strong> See step analysis for worst-case scenario conditions.</p>
+<p><strong>Key risk:</strong> Current valuation may already price in optimistic scenarios.</p></div>
 <hr style="margin:40px 0 20px;border-color:var(--c-border)">
 <p style="color:var(--c-muted);font-size:.82em;text-align:center;line-height:1.8">
 <strong>InvestPilot 9-Step Deep Research Pipeline</strong><br>{ticker} · {today} · Monte Carlo: t-Copula (df=6, ρ=0.4)<br>

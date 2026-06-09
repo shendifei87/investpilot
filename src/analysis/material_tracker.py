@@ -326,11 +326,12 @@ class MaterialTracker(WorkspaceStateBase):
 
             doc_type = "broker_report" if path.suffix.lower() == ".pdf" else "other"
             lower_name = path.name.lower()
-            if any(token in lower_name for token in ["annual", "年报", "10-k"]):
+            stem = path.stem.lower()
+            if any(token in stem for token in ["annual", "年报", "10-k", "10k"]):
                 doc_type = "annual_report"
-            elif any(token in lower_name for token in ["interim", "中报", "半年度"]):
+            elif any(token in stem for token in ["interim", "中报", "半年度", "semiannual"]):
                 doc_type = "interim_report"
-            elif any(token in lower_name for token in ["quarter", "季度", "10-q"]):
+            elif any(token in stem for token in ["quarter", "季度", "10-q", "10q", "q1", "q2", "q3", "q4"]):
                 doc_type = "quarterly_report"
 
             docs.append(self.add_document(

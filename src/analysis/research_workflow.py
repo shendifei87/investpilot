@@ -72,8 +72,6 @@ class ResearchWorkflow(WorkspaceStateBase):
 
         previous_version = int(self._data.get("version", 1) or 1)
         obsolete = {"4a", "4b", "4c"}
-        if previous_version < 3:
-            obsolete.update({"4", "5", "6", "7"})
         for step in obsolete:
             if step in steps:
                 steps.pop(step, None)
@@ -112,7 +110,7 @@ class ResearchWorkflow(WorkspaceStateBase):
         """
         for step in STEP_ORDER:
             current = self._status(step)
-            if current in {"completed", "blocked", "skipped"}:
+            if current in {"completed", "blocked", "skipped", "in_progress"}:
                 continue
             deps_completed = all(self._status(dep) == "completed" for dep in STEP_DEPENDENCIES[step])
             if not deps_completed:

@@ -58,8 +58,11 @@ class TushareClient:
             time.sleep(_MIN_CALL_INTERVAL - elapsed)
         self._last_call_ts = time.monotonic()
 
+    # Exceptions that are not worth retrying (logic / auth / input errors)
+    _NON_RETRYABLE = (AttributeError, ValueError, TypeError, KeyError, PermissionError)
+
     def _call(self, method_name: str, **kwargs) -> pd.DataFrame:
-        """Call a Tushare API method with retry (3 attempts)."""
+        """Call a Tushare API method with retry (3 attempts) on transient errors."""
         api = self._get_api()
         fn = getattr(api, method_name, None)
         if fn is None:
@@ -71,6 +74,8 @@ class TushareClient:
                 self._throttle()
                 df = fn(**kwargs)
                 return df if df is not None else pd.DataFrame()
+            except self._NON_RETRYABLE:
+                raise  # Don't retry logic / auth / input errors
             except Exception as e:
                 last_err = e
                 logger.warning(

@@ -253,6 +253,8 @@ class KnowledgeGraph:
         if ticker not in self._data["companies"]:
             raise ValueError(f"No research record for {ticker}")
 
+        import copy
+
         current = self._data["companies"][ticker].get("current", {})
         current["outcome"] = outcome
         current["return_pct"] = return_pct
@@ -261,7 +263,7 @@ class KnowledgeGraph:
         current["outcome_notes"] = notes
 
         self._save()
-        return current
+        return copy.deepcopy(current)
 
     def add_lesson(
         self,

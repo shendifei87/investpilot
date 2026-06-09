@@ -112,6 +112,7 @@ a:hover { text-decoration: underline; }
     <h1>Invest<span>Pilot</span></h1>
     <span class="subtitle">Deep Fundamental Research</span>
   </div>
+  <nav><a href="/about" style="color:#8b949e;font-size:14px;">About</a></nav>
 </div>
 
 <div class="container">
@@ -208,15 +209,16 @@ async function loadList() {
   }
   container.innerHTML = data.map(ws => {
     const pct = ws.total > 0 ? (ws.completed / ws.total * 100) : 0;
+    const safeTicker = ws.ticker.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const reportBtn = (ws.reports && ws.reports.length > 0)
-      ? `<a class="report-btn" href="/api/research/${ws.ticker}/report/${ws.reports[0]}" target="_blank" onclick="event.stopPropagation()">View Report</a>`
+      ? `<a class="report-btn" href="/api/research/${encodeURIComponent(ws.ticker)}/report/${encodeURIComponent(ws.reports[0])}" target="_blank" onclick="event.stopPropagation()">View Report</a>`
       : '';
     const triageLabel = ws.triage_status === 'completed'
       ? '<span style="font-size:11px;color:#d29922;">Triage done</span>'
       : '';
-    return `<div class="ws-card" onclick="showDetail('${ws.ticker}')">
+    return `<div class="ws-card" onclick="showDetail('${safeTicker}')">
       <div style="display:flex;align-items:center;gap:8px;">
-        <span class="ticker">${ws.ticker}</span>
+        <span class="ticker">${safeTicker}</span>
         <span class="status-badge ${ws.status}">${ws.status.replace('_', ' ')}</span>
         ${ws.has_materials ? '<span style="font-size:11px;color:#8b949e;">PDFs loaded</span>' : '<span style="font-size:11px;color:#f85149;">No PDFs</span>'}
         ${triageLabel}
@@ -261,7 +263,8 @@ async function loadDetail(ticker) {
     let links = data.reports.map((r, i) => {
       const date = r.match(/(\d{8})\.html/);
       const label = date ? date[1].replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : r;
-      return `<a class="report-btn${i > 0 ? ' btn-secondary' : ''}" href="/api/research/${ticker}/report/${r}" target="_blank" style="${i > 0 ? 'background:#30363d;' : ''}margin-left:4px;">${label}</a>`;
+      const safeLabel = label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return `<a class="report-btn${i > 0 ? ' btn-secondary' : ''}" href="/api/research/${encodeURIComponent(ticker)}/report/${encodeURIComponent(r)}" target="_blank" style="${i > 0 ? 'background:#30363d;' : ''}margin-left:4px;">${safeLabel}</a>`;
     }).join('');
     reportEl.innerHTML = links;
   } else {

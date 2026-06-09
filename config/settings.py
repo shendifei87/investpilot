@@ -15,13 +15,13 @@ MARKET_CONFIG = {
         "exchange": "NYSE / NASDAQ",
         "currency": "USD",
         "suffix": "",
-        "primary_source": "tushare",
+        "primary_source": "akshare",
     },
     "HK": {
         "exchange": "HKEX",
         "currency": "HKD",
         "suffix": ".HK",
-        "primary_source": "tushare",
+        "primary_source": "akshare",
     },
     "ASHARE": {
         "exchange": "SSE / SZSE",

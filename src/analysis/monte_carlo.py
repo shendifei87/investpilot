@@ -324,7 +324,22 @@ def run_monte_carlo(
         for i, name in enumerate(names):
             samples[:, i] = assumption_distributions[name].rvs(n_simulations, rng=rng)
 
-    # Discover output keys from first simulation
+    # ── Vectorized path: pass entire sample arrays to model function ──
+    vectorized_inputs = {name: samples[:, i] for i, name in enumerate(names)}
+    try:
+        vectorized_result = pnl_model_fn(vectorized_inputs)
+        if isinstance(vectorized_result, dict) and all(
+            isinstance(v, np.ndarray) and v.shape == (n_simulations,)
+            for v in vectorized_result.values()
+        ):
+            output = dict(vectorized_result)
+            output["seed"] = actual_seed
+            output["n_simulations"] = n_simulations
+            return output
+    except Exception:
+        pass  # model function doesn't support array inputs, fall through
+
+    # ── Sequential fallback (for non-vectorizable model functions) ──
     first_inputs = {name: samples[0, i] for i, name in enumerate(names)}
     first_result = pnl_model_fn(first_inputs)
     result_keys = list(first_result.keys())

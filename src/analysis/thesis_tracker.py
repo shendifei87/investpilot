@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import calendar
+import copy
 from datetime import datetime, date
 from enum import Enum
 from typing import Optional
@@ -127,9 +128,9 @@ class ThesisTracker(WorkspaceStateBase):
             "edge_type": current.get("edge_type", ""),
             "edge_score": current.get("edge_score", {}),
             "kill_switches": current.get("kill_switches", []),
-            "hypotheses": list(current.get("hypotheses", [])),
-            "catalysts": list(current.get("catalysts", [])),
-            "changelog": list(current.get("changelog", [])) + [
+            "hypotheses": copy.deepcopy(current.get("hypotheses", [])),
+            "catalysts": copy.deepcopy(current.get("catalysts", [])),
+            "changelog": copy.deepcopy(current.get("changelog", [])) + [
                 {
                     "date": now.strftime("%Y-%m-%d"),
                     "action": "thesis_revised",
@@ -186,12 +187,13 @@ class ThesisTracker(WorkspaceStateBase):
         status: HypothesisStatus,
         actual_result: str = "",
         notes: str = "",
+        *,
+        force: bool = False,
     ) -> dict:
         """Resolve a hypothesis (confirm, invalidate, or mark expired).
 
         Prevents pre-confirmation: if the hypothesis has a future catalyst_date
-        and status is CONFIRMED, raises ValueError unless force=True is passed
-        via notes='force'.
+        and status is CONFIRMED, raises ValueError unless force=True.
         """
         current = self._current()
         if not current:
@@ -202,11 +204,11 @@ class ThesisTracker(WorkspaceStateBase):
                 # Guard against pre-confirmation
                 if status == HypothesisStatus.CONFIRMED and hyp.get("catalyst_date"):
                     today = datetime.now().strftime("%Y-%m-%d")
-                    if hyp["catalyst_date"] > today and notes != "force":
+                    if hyp["catalyst_date"] > today and not force:
                         raise ValueError(
                             f"Cannot confirm hypothesis '{hyp['id']}' before its catalyst date "
                             f"({hyp['catalyst_date']}). The data to verify this hypothesis "
-                            f"is not yet available. Pass notes='force' to override."
+                            f"is not yet available. Pass force=True to override."
                         )
 
                 hyp["status"] = status
@@ -224,8 +226,8 @@ class ThesisTracker(WorkspaceStateBase):
 
         raise ValueError(f"Hypothesis '{hypothesis_id_or_desc}' not found.")
 
-    def confirm_hypothesis(self, hypothesis_id_or_desc: str, actual_result: str = "", notes: str = "") -> dict:
-        return self.resolve_hypothesis(hypothesis_id_or_desc, HypothesisStatus.CONFIRMED, actual_result, notes)
+    def confirm_hypothesis(self, hypothesis_id_or_desc: str, actual_result: str = "", notes: str = "", *, force: bool = False) -> dict:
+        return self.resolve_hypothesis(hypothesis_id_or_desc, HypothesisStatus.CONFIRMED, actual_result, notes, force=force)
 
     def invalidate_hypothesis(self, hypothesis_id_or_desc: str, actual_result: str = "", notes: str = "") -> dict:
         return self.resolve_hypothesis(hypothesis_id_or_desc, HypothesisStatus.INVALIDATED, actual_result, notes)

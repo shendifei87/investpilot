@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About InvestPilot</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; }
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 20px; font-weight: 600; color: #f0f6fc; }
+.header h1 span { color: #3fb950; }
+.header nav a { color: #8b949e; font-size: 14px; margin-left: 20px; }
+.header nav a:hover { color: #c9d1d9; text-decoration: none; }
+
+.container { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+.hero { text-align: center; margin-bottom: 40px; }
+.hero h2 { font-size: 28px; color: #f0f6fc; margin-bottom: 12px; }
+.hero .tagline { color: #3fb950; font-size: 16px; }
+
+section { margin-bottom: 36px; }
+section h2 { font-size: 18px; color: #f0f6fc; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #30363d; }
+section p { font-size: 14px; line-height: 1.8; color: #c9d1d9; margin-bottom: 10px; }
+
+.philosophy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 12px; }
+.phil-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.phil-card .icon { font-size: 20px; margin-bottom: 8px; }
+.phil-card h3 { font-size: 14px; color: #f0f6fc; margin-bottom: 6px; }
+.phil-card p { font-size: 12px; color: #8b949e; line-height: 1.6; }
+
+.pipeline-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pipeline-table th, .pipeline-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #21262d; }
+.pipeline-table th { color: #8b949e; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+.pipeline-table td { color: #c9d1d9; }
+.pipeline-table tr:hover { background: #161b22; }
+.pipeline-table .step-num { color: #58a6ff; font-weight: 600; width: 50px; }
+.pipeline-table .gate { color: #d29922; }
+.pipeline-table .output { color: #3fb950; font-size: 11px; }
+
+.market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 12px; }
+.market-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.market-card h3 { font-size: 14px; color: #f0f6fc; margin-bottom: 6px; }
+.market-card .flag { font-size: 18px; margin-right: 6px; }
+.market-card p { font-size: 12px; color: #8b949e; line-height: 1.6; }
+
+.tech-stack { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.tech-tag { background: #21262d; color: #8b949e; font-size: 12px; padding: 4px 12px; border-radius: 12px; border: 1px solid #30363d; }
+
+.footer { text-align: center; color: #484f58; font-size: 12px; margin-top: 48px; padding-top: 24px; border-top: 1px solid #21262d; }
+.footer a { color: #484f58; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1><a href="/" style="color:inherit;">Invest<span>Pilot</span></a></h1>
+  </div>
+  <nav>
+    <a href="/" style="color:#c9d1d9;">Dashboard</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <div class="hero">
+    <h2>Deep Fundamental Research Harness</h2>
+    <p class="tagline">对冲基金式深度基本面分析 · 寻找0–3个月内的预期差</p>
+  </div>
+
+  <section>
+    <h2>What is InvestPilot?</h2>
+    <p>
+      InvestPilot is a <strong>deep fundamental investment research framework</strong> built on Claude Code.
+      It emulates the workflow of a buy-side equity research analyst at a fundamental-driven hedge fund —
+      systematically identifying <strong>significantly undervalued stocks</strong> with high reward-to-risk
+      and high probability of materialization within 0–3 months.
+    </p>
+    <p>
+      Rather than surface-level screening, InvestPilot performs a rigorous, evidence-based 9-step process:
+      from business deep-dive and competitive moat analysis through financial modeling, Monte Carlo simulation,
+      and risk-reward strategy — culminating in a research director review.
+    </p>
+  </section>
+
+  <section>
+    <h2>Investment Philosophy</h2>
+    <div class="philosophy-grid">
+      <div class="phil-card">
+        <div class="icon">🔍</div>
+        <h3>Expectation Gap</h3>
+        <p>Alpha comes from identifying gaps between market consensus and reality — not from following the crowd.</p>
+      </div>
+      <div class="phil-card">
+        <div class="icon">🧮</div>
+        <h3>Self-Calculated Valuation</h3>
+        <p>Every PE, PB, EV/EBITDA is computed from raw financial data. No pre-computed numbers from news or reports.</p>
+      </div>
+      <div class="phil-card">
+        <div class="icon">🎲</div>
+        <h3>Probabilistic Thinking</h3>
+        <p>Monte Carlo simulations with t-Copula dependency structures. Distributions, not point estimates.</p>
+      </div>
+      <div class="phil-card">
+        <div class="icon">⚖️</div>
+        <h3>Contrarian Discipline</h3>
+        <p>Every step ends with a mandatory contrarian check. "What if I'm wrong?" is not optional.</p>
+      </div>
+      <div class="phil-card">
+        <div class="icon">⏳</div>
+        <h3>Time Decay Aware</h3>
+        <p>Edges decay. Catalysts expire. Position sizing adjusts. Kelly half with conviction modifier.</p>
+      </div>
+      <div class="phil-card">
+        <div class="icon">🌐</div>
+        <h3>Multi-Market</h3>
+        <p>A-shares, Hong Kong, and US equity markets — each with purpose-built data pipelines.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>9-Step Research Pipeline</h2>
+    <table class="pipeline-table">
+      <thead>
+        <tr><th>#</th><th>Step</th><th>Role</th><th>Output</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="step-num">0</td>
+          <td>Quick Triage <span class="gate">◀ Gate</span></td>
+          <td>Screen: PASS / WATCH / FULL_RESEARCH</td>
+          <td class="output">step0_quick_triage.md</td>
+        </tr>
+        <tr><td class="step-num">1</td><td>Business Deep Dive</td><td>Understand how the company makes money</td><td class="output">step1_business_analysis.md</td></tr>
+        <tr><td class="step-num">2</td><td>Competitive Moat</td><td>Assess durability of advantages</td><td class="output">step2_competitive_moat.md</td></tr>
+        <tr><td class="step-num">3</td><td>Marginal Changes & Expectation Gap</td><td>Identify what's changing at the margin</td><td class="output">step3_marginal_changes.md</td></tr>
+        <tr><td class="step-num">4</td><td>Assumption Research</td><td>Decompose growth drivers; structured assumptions</td><td class="output">step4_structured_assumptions.json</td></tr>
+        <tr><td class="step-num">5</td><td>Financial Model Build</td><td>3-year forecasts; EPS bridge; DCF cross-check</td><td class="output">forecast_model.json / .html</td></tr>
+        <tr><td class="step-num">6</td><td>Monte Carlo Simulation</td><td>Target price distribution; sensitivity matrix</td><td class="output">forward_pe_band.png</td></tr>
+        <tr><td class="step-num">7</td><td>RRR & Trading Strategy</td><td>Risk-reward ratio; Kelly sizing; entry/exit plan</td><td class="output">step7_rrr_strategy.md</td></tr>
+        <tr><td class="step-num">8</td><td>Auditing</td><td>Cross-verify all calculations and assumptions</td><td class="output">step8_auditing.md</td></tr>
+        <tr><td class="step-num">9</td><td>Research Director Review</td><td>Adversarial quality review; IC sign-off</td><td class="output">step9_research_director_review.md</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Market Coverage</h2>
+    <div class="market-grid">
+      <div class="market-card">
+        <h3><span class="flag">🇨🇳</span>A-Share</h3>
+        <p>Primary: Tushare Pro (2000 pts). Real-time capital flow, financials, industry classifications. Report language: Chinese.</p>
+      </div>
+      <div class="market-card">
+        <h3><span class="flag">🇭🇰</span>Hong Kong</h3>
+        <p>Primary: AKShare. Supplement: Tushare southbound flow. Report language: Chinese.</p>
+      </div>
+      <div class="market-card">
+        <h3><span class="flag">🇺🇸</span>US Equity</h3>
+        <p>Primary: AKShare + SEC EDGAR + WebSearch. 40+ US macro indicators. Report language: English.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Edge Classification</h2>
+    <table class="pipeline-table">
+      <thead>
+        <tr><th>Type</th><th>Definition</th><th>Decay Speed</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Analytical</td><td>Deeper processing of public information</td><td>High (1–3 months)</td></tr>
+        <tr><td>Informational</td><td>Information not fully digested by the market</td><td>Very high (days–weeks)</td></tr>
+        <tr><td>Temporal</td><td>Willingness to wait longer than the market</td><td>None (self-controlled)</td></tr>
+        <tr><td>Structural</td><td>Market structure distortions (passive flows, forced selling)</td><td>Low (persistent)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Tech Stack</h2>
+    <div class="tech-stack">
+      <span class="tech-tag">Python 3.9+</span>
+      <span class="tech-tag">Claude Code (Opus 4.8)</span>
+      <span class="tech-tag">Hono (TypeScript)</span>
+      <span class="tech-tag">Tushare Pro</span>
+      <span class="tech-tag">AKShare</span>
+      <span class="tech-tag">Monte Carlo / SciPy</span>
+      <span class="tech-tag">Matplotlib</span>
+      <span class="tech-tag">Git Worktree Isolation</span>
+      <span class="tech-tag">Vitest</span>
+      <span class="tech-tag">Pytest</span>
+    </div>
+  </section>
+
+  <div class="footer">
+    InvestPilot · Deep Fundamental Research Harness · Powered by <a href="https://claude.com/claude-code">Claude Code</a>
+  </div>
+</div>
+
+</body>
+</html>

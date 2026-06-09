@@ -8,7 +8,7 @@ use these alternative domains.  Grouped by market.
 HK_IR_DOMAINS = {
     "hkex_news": "https://www1.hkexnews.hk/search/titlesearch.xhtml",
     "aastocks": "https://www.aastocks.com/en/stocks/analysis/company-fundamental/",
-    "etnet": "http://warrants.etnet.com.hk/www/sc/stocks/realtime/quote_ci_pl.php",
+    "etnet": "https://warrants.etnet.com.hk/www/sc/stocks/realtime/quote_ci_pl.php",
     "futunn": "https://www.futunn.com/en/stock/{ticker}-HK/financials-income-statement",
     "stockanalysis": "https://stockanalysis.com/quote/hkg/{ticker}/financials/",
     "investing": "https://uk.investing.com/equities/{name}-financial-summary",

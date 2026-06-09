@@ -103,7 +103,7 @@ class BaseTushareFetcher(BaseFetcher):
     @staticmethod
     def _compute_ev(market_cap, total_debt, total_cash) -> Optional[float]:
         """Compute Enterprise Value = market_cap + total_debt - total_cash."""
-        if market_cap and total_debt:
+        if market_cap is not None and total_debt is not None:
             return float(market_cap) + float(total_debt) - float(total_cash or 0)
         return None
 

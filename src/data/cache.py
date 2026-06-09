@@ -34,6 +34,8 @@ def fetch_and_cache(
     df = fetch_fn()
     if df is None:
         raise ValueError(f"fetch_fn for '{cache_key}' returned None")
+    if df.empty:
+        return df
     df.to_csv(cp)
     mp.write_text(json.dumps({"timestamp": time.time(), "key": cache_key}), encoding="utf-8")
     return df
@@ -42,8 +44,15 @@ def fetch_and_cache(
 def invalidate_cache(ticker: str) -> None:
     if not CACHE_DIR.exists():
         return
-    for f in CACHE_DIR.glob(f"*{ticker}*"):
-        f.unlink()
+    sep = "_"
+    for f in CACHE_DIR.iterdir():
+        if not f.is_file():
+            continue
+        name = f.stem
+        # Match exact ticker segment: "daily_600519.SH_..." or "600519.SH_..."
+        parts = name.split(sep)
+        if ticker in parts:
+            f.unlink()
 
 
 def clear_all_cache() -> None:

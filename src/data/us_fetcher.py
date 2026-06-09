@@ -56,8 +56,18 @@ def _sec_headers() -> dict[str, str]:
     return {"User-Agent": user_agent}
 
 
+# SEC EDGAR requires max 10 requests/sec; use 100ms floor between calls
+_last_sec_request_time: float = 0.0
+_SEC_MIN_INTERVAL = 0.10  # seconds
+
+
 def _request_json(url: str) -> dict[str, Any]:
+    global _last_sec_request_time
+    elapsed = time.monotonic() - _last_sec_request_time
+    if elapsed < _SEC_MIN_INTERVAL:
+        time.sleep(_SEC_MIN_INTERVAL - elapsed)
     response = requests.get(url, headers=_sec_headers(), timeout=20)
+    _last_sec_request_time = time.monotonic()
     response.raise_for_status()
     data = response.json()
     return data if isinstance(data, dict) else {}
@@ -162,6 +172,26 @@ class USFetcher(BaseFetcher):
             [("us-gaap", "Liabilities")],
             ("USD",),
         )
+        # Interest-bearing debt components (NOT total liabilities)
+        lt_debt = self._latest_fact_value(
+            facts,
+            [("us-gaap", "LongTermDebt")],
+            ("USD",),
+        )
+        st_borr = self._latest_fact_value(
+            facts,
+            [("us-gaap", "ShortTermBorrowings")],
+            ("USD",),
+        )
+        current_portion = self._latest_fact_value(
+            facts,
+            [
+                ("us-gaap", "CurrentPortionOfLongTermDebt"),
+                ("us-gaap", "DebtWithMaturitiesDueWithinOneYear"),
+            ],
+            ("USD",),
+        )
+        total_debt = sum(v for v in [lt_debt, st_borr, current_portion] if v) or None
         equity = self._latest_fact_value(
             facts,
             [
@@ -199,7 +229,8 @@ class USFetcher(BaseFetcher):
             }]),
             "balance_sheet": pd.DataFrame([{
                 "Total Assets": assets,
-                "Total Debt": liabilities,
+                "Total Liabilities": liabilities,
+                "Total Debt": total_debt,
                 "Total Stockholder Equity": equity,
                 "Cash And Cash Equivalents": cash,
             }]),
@@ -329,6 +360,26 @@ class USFetcher(BaseFetcher):
                 [("us-gaap", "Liabilities")],
                 ("USD",),
             )
+            # Interest-bearing debt components (NOT total liabilities)
+            lt_debt = self._latest_fact_value(
+                facts,
+                [("us-gaap", "LongTermDebt")],
+                ("USD",),
+            )
+            st_borr = self._latest_fact_value(
+                facts,
+                [("us-gaap", "ShortTermBorrowings")],
+                ("USD",),
+            )
+            current_portion = self._latest_fact_value(
+                facts,
+                [
+                    ("us-gaap", "CurrentPortionOfLongTermDebt"),
+                    ("us-gaap", "DebtWithMaturitiesDueWithinOneYear"),
+                ],
+                ("USD",),
+            )
+            total_debt = sum(v for v in [lt_debt, st_borr, current_portion] if v) or None
             cash = self._latest_fact_value(
                 facts,
                 [
@@ -348,14 +399,16 @@ class USFetcher(BaseFetcher):
                 result["net_income_ttm"] = net_income
             if equity and shares:
                 result["book_value_per_share"] = equity / shares
-            if liabilities:
-                result["total_debt"] = liabilities
+            if total_debt:
+                result["total_debt"] = total_debt
+            elif liabilities:
+                result["total_liab"] = liabilities
             if cash:
                 result["total_cash"] = cash
             if result.get("current_price") and shares:
                 result["market_cap"] = float(result["current_price"]) * shares
-            if result.get("market_cap") and liabilities:
-                result["enterprise_value"] = float(result["market_cap"]) + liabilities - float(cash or 0)
+            if result.get("market_cap") and total_debt:
+                result["enterprise_value"] = float(result["market_cap"]) + total_debt - float(cash or 0)
         except Exception as exc:
             warnings.append(f"SEC valuation inputs failed: {exc}")
 

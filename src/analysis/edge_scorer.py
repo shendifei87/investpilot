@@ -24,11 +24,14 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Optional
 
 from config.settings import WORKSPACES_DIR
 from src.storage import AtomicJSON
+
+logger = logging.getLogger(__name__)
 
 
 EDGE_TYPES = {
@@ -251,6 +254,11 @@ class EdgeScorer:
             return
         history = self._store.load("edge_score.json", default=[])
         if not isinstance(history, list):
+            logger.warning(
+                "edge_score.json is corrupt (type=%s); resetting to empty list. "
+                "Previous history is lost.",
+                type(history).__name__,
+            )
             history = []
         history.append(result)
         self._store.save("edge_score.json", history)

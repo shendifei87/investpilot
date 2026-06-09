@@ -36,11 +36,10 @@ research.post("/api/research", async (c) => {
   fs.mkdirSync(wsPath, { recursive: true });
 
   if (notes) {
-    fs.writeFileSync(
-      path.join(wsPath, "user_notes.md"),
-      `# User Notes\n\n${notes}\n`,
-      "utf-8",
-    );
+    const notesPath = path.join(wsPath, "user_notes.md");
+    if (!fs.existsSync(notesPath)) {
+      fs.writeFileSync(notesPath, `# User Notes\n\n${notes}\n`, "utf-8");
+    }
   }
 
   return c.json({

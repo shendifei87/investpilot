@@ -160,12 +160,12 @@ class TestHypothesis:
             tracker.confirm_hypothesis("Future event", actual_result="premature")
 
     def test_pre_confirmation_force_override(self, tmp_path):
-        """Force override allows pre-confirmation with notes='force'."""
+        """Force override allows pre-confirmation with force=True."""
         tracker = _make_tracker(tmp_path)
         tracker.create("Thesis")
         future = (date.today().year + 1)
         tracker.add_hypothesis("Override test", catalyst_date=f"{future}-06-30")
-        result = tracker.confirm_hypothesis("Override test", actual_result="forced", notes="force")
+        result = tracker.confirm_hypothesis("Override test", actual_result="forced", force=True)
         assert result["status"] == HypothesisStatus.CONFIRMED
 
     def test_resolve_by_id_or_description(self, tmp_path):

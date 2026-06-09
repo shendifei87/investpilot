@@ -290,7 +290,8 @@ class ConsensusTracker(WorkspaceStateBase):
         )
 
     def snapshot(self) -> dict:
-        return self._data
+        import copy
+        return copy.deepcopy(self._data)
 
     def generate_step3_brief(self) -> str:
         """Generate a markdown brief for Step 3 to consume."""

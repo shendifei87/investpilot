@@ -33,6 +33,15 @@ class AtomicJSON:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._lock_file = self._dir / ".storage.lock"
 
+    @staticmethod
+    def _validate_filename(filename: str) -> str:
+        """Reject filenames with path traversal or directory separators."""
+        if not filename or filename.startswith(".") and len(filename) > 2:
+            pass  # Allow .storage.lock etc., just check separators
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise ValueError(f"Invalid filename (path traversal): {filename!r}")
+        return filename
+
     def load(self, filename: str, default: dict | list | None = None) -> dict | list:
         """Load JSON file with corruption recovery.
 
@@ -73,12 +82,14 @@ class AtomicJSON:
         try:
             os.write(fd, content.encode("utf-8"))
             os.close(fd)
+            fd = -1  # Mark as closed to prevent double-close in except
             os.replace(tmp_path, str(filepath))
         except BaseException:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            if fd != -1:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             try:
                 os.unlink(tmp_path)
             except OSError:
@@ -95,6 +106,7 @@ class AtomicJSON:
         4. Atomic rename (os.replace) to final path
         5. Release lock
         """
+        self._validate_filename(filename)
         filepath = self._dir / filename
         backup = self._dir / f"{filename}.bak"
 

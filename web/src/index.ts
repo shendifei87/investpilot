@@ -41,6 +41,16 @@ app.use(
 // Health check — no auth required
 app.route("/", healthRoutes);
 
+// About page — no auth required, served before auth middleware
+app.get("/about", (c) => {
+  const htmlPath = path.join(WEB_DIR, "about.html");
+  if (!fs.existsSync(htmlPath)) {
+    return c.json({ error: "about.html not found" }, 500);
+  }
+  const html = fs.readFileSync(htmlPath, "utf-8");
+  return c.html(html);
+});
+
 // Auth middleware for all other routes (runs after health, before everything else)
 app.use("*", authMiddleware);
 

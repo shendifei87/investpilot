@@ -149,15 +149,16 @@ class CatalystTracker(WorkspaceStateBase):
                 history = thesis_data.get("history", [])
                 if history:
                     thesis_created_date = history[0].get("created", "")
-            if not thesis_created_date:
-                if self._data["catalysts"]:
-                    dates = [c["expected_date"] for c in self._data["catalysts"] if c["status"] == "pending"]
-                    if dates:
-                        thesis_created_date = min(dates)
-                    else:
-                        thesis_created_date = today.isoformat()
+        # Fallback: earliest catalyst expected_date as rough proxy
+        if not thesis_created_date:
+            if self._data["catalysts"]:
+                dates = [c["expected_date"] for c in self._data["catalysts"] if c["status"] == "pending"]
+                if dates:
+                    thesis_created_date = min(dates)
                 else:
                     thesis_created_date = today.isoformat()
+            else:
+                thesis_created_date = today.isoformat()
 
         created = date.fromisoformat(thesis_created_date) if isinstance(thesis_created_date, str) else thesis_created_date
         days_elapsed = (today - created).days
