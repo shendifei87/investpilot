@@ -2,7 +2,7 @@
 
 ## Overview
 
-InvestPilot is a deep fundamental research framework built on Claude Code. Investment style: deep fundamental-driven hedge fund, seeking significantly undervalued stocks (high reward-to-risk + high probability). Core thesis: identify expectation gaps that materialize within 0–3 months.
+InvestPilot is a deep fundamental research framework built on Claude Code. Investment style: deep fundamental-driven hedge fund, emphasizing high reward-to-risk (高赔率) opportunities with high probability of thesis realization. Core thesis: identify expectation gaps that materialize within 0–3 months.
 
 ## Your Role
 

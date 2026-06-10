@@ -1,6 +1,6 @@
 # InvestPilot
 
-A deep fundamental investment research harness built on Claude Code. Seeks significantly undervalued stocks (high reward-to-risk + high probability), with the core thesis of identifying expectation gaps that materialize within 0–3 months.
+A deep fundamental investment research harness built on Claude Code. Emphasizes high reward-to-risk (高赔率) opportunities with high probability of thesis realization, with the core thesis of identifying expectation gaps that materialize within 0–3 months.
 
 ## Features
 
