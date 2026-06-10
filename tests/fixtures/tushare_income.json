@@ -1,0 +1,22 @@
+[
+  {
+    "ts_code": "600519.SH",
+    "ann_date": "20260401",
+    "end_date": "20251231",
+    "report_type": "1",
+    "total_revenue": 150000.0,
+    "revenue": 145000.0,
+    "oper_cost": 50000.0,
+    "sell_exp": 8000.0,
+    "admin_exp": 5000.0,
+    "fin_exp": 500.0,
+    "operate_profit": 40000.0,
+    "total_profit": 42000.0,
+    "income_tax": 10500.0,
+    "n_income": 31500.0,
+    "n_income_attr_p": 31000.0,
+    "basic_eps": 31.0,
+    "diluted_eps": 30.5,
+    "rd_exp": 200.0
+  }
+]

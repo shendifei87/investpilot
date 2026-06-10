@@ -1,0 +1,15 @@
+[
+  {
+    "ts_code": "600519.SH",
+    "end_date": "20251231",
+    "eps": 31.0,
+    "dt_eps": 30.5,
+    "bps": 200.0,
+    "roe": 15.5,
+    "roe_dt": 15.0,
+    "gross_margin": 65.5,
+    "netprofit_margin": 21.0,
+    "ebitda": 45000.0,
+    "debt_to_assets": 33.3
+  }
+]

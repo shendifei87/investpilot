@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "ticker": "608888.SS",
+  "generated_at": "2026-06-01T12:00:00Z",
+  "config": {
+    "simulations": 100000,
+    "copula_df": 6,
+    "forward_year": "T1"
+  },
+  "percentiles": {
+    "p10": 30.00,
+    "p25": 36.50,
+    "p50": 45.00,
+    "p75": 55.00,
+    "p90": 68.00
+  },
+  "statistics": {
+    "mean": 46.20,
+    "std": 14.50,
+    "skewness": 0.35,
+    "kurtosis": 3.20
+  },
+  "current_price": 42.50,
+  "implied_upside_pct": {
+    "to_p50": 5.9,
+    "to_p75": 29.4,
+    "to_p90": 60.0
+  },
+  "rrr": {
+    "p50_target": 45.00,
+    "p_down": 0.35,
+    "p_up": 0.65,
+    "rrr_ratio": 2.1
+  }
+}

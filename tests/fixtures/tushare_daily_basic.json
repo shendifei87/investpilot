@@ -1,0 +1,15 @@
+[
+  {
+    "trade_date": "20260101",
+    "close": 25.0,
+    "pe_ttm": 18.0,
+    "pe": 17.5,
+    "pb": 3.2,
+    "ps_ttm": 2.5,
+    "total_share": 1000.0,
+    "total_mv": 250000.0,
+    "circ_mv": 200000.0,
+    "turnover_rate": 1.2,
+    "volume_ratio": 0.95
+  }
+]

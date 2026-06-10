@@ -5,7 +5,9 @@ dist/
 build/
 reports/
 data_cache/
-workspaces/
+workspaces/*
+!workspaces/_sample/
+!workspaces/_sample/**
 .env
 *.env
 .venv/

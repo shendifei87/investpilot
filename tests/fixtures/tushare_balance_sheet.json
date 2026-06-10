@@ -1,0 +1,16 @@
+[
+  {
+    "ts_code": "600519.SH",
+    "ann_date": "20260401",
+    "end_date": "20251231",
+    "total_assets": 300000.0,
+    "total_liab": 100000.0,
+    "total_hldr_eqy_exc_min_int": 200000.0,
+    "money_cap": 50000.0,
+    "st_borr": 8000.0,
+    "lt_borr": 12000.0,
+    "bond_payable": 3000.0,
+    "non_cur_liab_due_1y": 1000.0,
+    "total_share": 1000.0
+  }
+]

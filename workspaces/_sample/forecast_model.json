@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "ticker": "608888.SS",
+  "generated_at": "2026-06-01T12:00:00Z",
+  "model_conventions": {
+    "currency": "CNY",
+    "unit": "亿元",
+    "percent_format": "integer_pct",
+    "pe_no_divide": true
+  },
+  "inputs": {
+    "current_price": 42.50,
+    "shares_outstanding": 2000000000,
+    "current_eps": 2.125,
+    "current_bps": 15.18,
+    "current_revenue": 250.0,
+    "gross_margin": 32.5,
+    "net_margin": 12.0,
+    "tax_rate": 25.0,
+    "beta": 1.1,
+    "risk_free_rate": 2.8,
+    "equity_risk_premium": 5.5,
+    "debt_to_equity": 0.15,
+    "interest_rate": 4.5,
+    "terminal_growth": 3.0
+  },
+  "income_statement": {
+    "T": {"revenue": 250.0, "cogs": 168.8, "gross_profit": 81.3, "sga": 30.0, "rd": 12.5, "ebit": 38.8, "interest": 1.5, "tax": 9.3, "net_income": 28.0, "eps": 2.125},
+    "T1": {"revenue": 275.0, "cogs": 183.7, "gross_profit": 91.3, "sga": 32.0, "rd": 13.8, "ebit": 45.5, "interest": 1.5, "tax": 11.0, "net_income": 33.0, "eps": 2.50},
+    "T2": {"revenue": 299.8, "cogs": 198.4, "gross_profit": 101.4, "sga": 34.0, "rd": 15.0, "ebit": 52.4, "interest": 1.4, "tax": 12.8, "net_income": 38.3, "eps": 2.90}
+  },
+  "cash_flow": {
+    "T": {"operating_cf": 40.0, "capex": -15.0, "free_cf": 25.0},
+    "T1": {"operating_cf": 46.0, "capex": -17.0, "free_cf": 29.0},
+    "T2": {"operating_cf": 52.0, "capex": -18.0, "free_cf": 34.0}
+  },
+  "balance_sheet": {
+    "T": {"cash": 50.0, "total_assets": 300.0, "total_debt": 30.0, "equity": 200.0},
+    "T1": {"cash": 62.0, "total_assets": 320.0, "total_debt": 28.0, "equity": 222.0},
+    "T2": {"cash": 78.0, "total_assets": 345.0, "total_debt": 26.0, "equity": 252.0}
+  },
+  "validation": {
+    "income_links_ok": true,
+    "balance_sheet_gap_pct": 0.005,
+    "eps_matches_net_income": true
+  }
+}
