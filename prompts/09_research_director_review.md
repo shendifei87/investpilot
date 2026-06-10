@@ -141,7 +141,47 @@ Begin the file with a review summary:
 
 ## Appendix A: Post-Research Initialization
 
-After Step 9 is complete, initialize all tracking systems:
+After Step 9 is complete, initialize all tracking systems.
+
+### 🚨 HARD RULE: MUST use Python classes, NOT manual JSON
+
+**禁止直接写 JSON 文件。** 所有追踪系统必须通过 Python 类初始化。LLM 直接写 JSON 会绕过版本化历史、变更日志、预确认防护等核心功能。
+
+**验证命令**（Step 9 complete 之前必须运行并全部通过）：
+
+```bash
+# 1. 验证 thesis.json 是 ThesisTracker 格式（有 "version" 和 "history" 键）
+python -c "
+from src.analysis.thesis_tracker import ThesisTracker
+t = ThesisTracker('{workspace_dir}')
+snap = t.snapshot()
+assert snap.get('status') != 'no_thesis', 'Thesis not initialized via ThesisTracker'
+assert snap.get('revision', 0) >= 1, 'Thesis has no revision history'
+print('✅ thesis.json valid — revision', snap['revision'], ', hypotheses:', snap['hypotheses_summary']['total'])
+"
+
+# 2. 验证 catalysts.json 是 CatalystTracker 格式（注意文件名是 catalysts.json，不是 catalyst_tracker.json）
+python -c "
+from src.analysis.catalyst_tracker import CatalystTracker
+ct = CatalystTracker('{workspace_dir}')
+decay = ct.time_decay_status()
+assert decay['total_catalysts'] > 0, 'No catalysts initialized'
+print('✅ catalysts.json valid —', decay['total_catalysts'], 'catalysts,', decay['pending_catalysts'], 'pending')
+"
+
+# 3. 验证 edge_score.json 是 EdgeScorer 格式（历史列表）
+python -c "
+from src.analysis.edge_scorer import EdgeScorer
+latest = EdgeScorer.load_latest('{workspace_dir}')
+assert latest is not None, 'Edge score not initialized via EdgeScorer'
+assert 'composite' in latest, 'Edge score missing composite'
+print('✅ edge_score.json valid — composite:', latest['composite'], ', grade:', latest['composite_grade'])
+"
+```
+
+**如果任何验证失败**，必须用下面的 Python 代码重新初始化，然后重新运行验证。
+
+### 初始化代码
 
 ```python
 from src.analysis.thesis_tracker import ThesisTracker
@@ -170,10 +210,14 @@ for event in step3_catalysts:
 for ks in step7_kill_switches:
     cat_tracker.add_kill_switch(ks)
 
-# 4. Initialize Edge Scorer (persists to edge_score.json)
+# 4. Initialize Edge Scorer (persists to edge_score.json as history list)
 scorer = EdgeScorer(workspace_dir)
 scores = scorer.score(
     analytical=..., informational=..., temporal=..., structural=...,
+    analytical_reason="...",
+    temporal_reason="...",
+    informational_reason="...",
+    structural_reason="...",
 )
 
 # 5. Record to Knowledge Graph

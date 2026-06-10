@@ -369,6 +369,68 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
         ),
     })
 
+    # ── Check: fx_rate for non-A-share stocks ──
+    # HK/US stocks need fx_rate in financial_model_inputs to convert RMB
+    # financials to trading currency. A-share stocks (no .HK/.SS suffix in
+    # segment currency) are exempt.
+    ws_name = filepath.parent.name
+    is_cross_currency = (
+        ws_name.endswith(".HK")
+        or any(
+            str(seg.get("currency", "")).upper() in ("HKD", "USD")
+            for seg in _normalize_segments(structured)
+        )
+        or any(
+            str(seg.get("currency", "")).upper() in ("HKD", "USD")
+            for seg in (structured.get("assumption_matrix", []) or [])
+            if isinstance(seg, dict)
+        )
+    )
+    fx_in_inputs = _to_float(model_inputs.get("fx_rate"))
+    if is_cross_currency and fx_in_inputs is None:
+        # Check if _reviewed_assumptions.json has it as fallback
+        reviewed_fx = None
+        reviewed_path = filepath.parent / "_reviewed_assumptions.json"
+        if reviewed_path.exists():
+            try:
+                reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
+                reviewed_fx = _to_float(
+                    reviewed.get("fx_rmb_to_hkd")
+                    or reviewed.get("fx_rmb_to_usd")
+                    or reviewed.get("fx_rate")
+                )
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+        if reviewed_fx is not None:
+            checks.append({
+                "check": "fx_rate_cross_currency",
+                "status": "WARN",
+                "detail": (
+                    f"fx_rate absent from financial_model_inputs but found in "
+                    f"_reviewed_assumptions.json ({reviewed_fx}). "
+                    f"Add fx_rate={reviewed_fx} to financial_model_inputs for single source of truth."
+                ),
+            })
+        else:
+            checks.append({
+                "check": "fx_rate_cross_currency",
+                "status": "FAIL",
+                "detail": (
+                    "Non-A-share stock detected but fx_rate is missing from both "
+                    "financial_model_inputs and _reviewed_assumptions.json. "
+                    "Target price will be wrong without FX conversion."
+                ),
+            })
+    else:
+        checks.append({
+            "check": "fx_rate_cross_currency",
+            "status": "PASS",
+            "detail": (
+                f"fx_rate={fx_in_inputs}" if fx_in_inputs
+                else "A-share stock — no FX conversion needed"
+            ),
+        })
+
     # ── Check 7: Historical valuation anchor ──
     hist_val = structured.get("historical_valuation", {})
     if hist_val and "pe_min" in hist_val and "pe_median" in hist_val:

@@ -5,36 +5,101 @@ import pandas as pd
 import numpy as np
 
 # Field name aliases: yfinance (English) → akshare (Chinese) → tushare/SEC/lowercase
+# Includes HK financial reporting terminology (港交所年报术语).
 _INCOME_ALIASES = {
-    "Total Revenue": ("营业总收入", "营业收入", "total_revenue", "revenue"),
-    "Gross Profit": ("毛利润", "gross_profit"),
-    "Operating Income": ("营业利润", "operate_profit", "operating_income", "ebit"),
-    "Net Income": ("净利润", "net_income", "n_income", "n_income_attr_p"),
+    "Total Revenue": (
+        "营业总收入", "营业收入", "total_revenue", "revenue",
+        # HK terminology
+        "营业额", "营运收入",
+    ),
+    "Gross Profit": (
+        "毛利润", "gross_profit",
+        # HK terminology
+        "毛利",
+    ),
+    "Operating Income": (
+        "营业利润", "operate_profit", "operating_income", "ebit",
+        # HK terminology
+        "经营溢利",
+    ),
+    "Net Income": (
+        "净利润", "net_income", "n_income", "n_income_attr_p",
+        # HK terminology
+        "股东应占溢利", "除税后溢利",
+    ),
     "Net Income from Continuing Operations": ("持续经营净利润",),
-    "Interest Expense": ("利息费用", "利息支出", "int_exp"),
-    "Tax Provision": ("所得税费用", "income_tax"),
-    "Diluted EPS": ("摊薄每股收益", "基本每股收益", "eps", "dt_eps", "diluted_eps"),
+    "Interest Expense": (
+        "利息费用", "利息支出", "int_exp",
+        # HK terminology
+        "融资成本",
+    ),
+    "Tax Provision": (
+        "所得税费用", "income_tax",
+        # HK terminology
+        "税项",
+    ),
+    "Diluted EPS": (
+        "摊薄每股收益", "基本每股收益", "eps", "dt_eps", "diluted_eps",
+        # HK terminology
+        "每股基本盈利", "每股摊薄盈利",
+    ),
+    "Cost of Goods Sold": (
+        "营业成本", "销售成本",
+    ),
+    "SGA Expense": (
+        "销售费用", "管理费用",
+        # HK terminology
+        "销售及分销费用", "行政开支",
+    ),
 }
 
 _BALANCE_ALIASES = {
-    "Total Stockholder Equity": ("所有者权益合计", "股东权益合计", "total_hldr_eqy_exc_min_int"),
+    "Total Stockholder Equity": (
+        "所有者权益合计", "股东权益合计", "total_hldr_eqy_exc_min_int",
+        # HK terminology
+        "股东权益", "总权益",
+    ),
     # Total Debt means interest-bearing debt only. Do not alias total_liab/负债合计 here.
     "Total Debt": ("有息负债合计", "total_debt", "debt"),
-    "Total Liabilities": ("负债合计", "总负债", "total_liab", "liabilities"),
+    "Total Liabilities": (
+        "负债合计", "总负债", "total_liab", "liabilities",
+    ),
     "Total Current Assets": ("流动资产合计", "total_cur_assets"),
     "Total Current Liabilities": ("流动负债合计", "total_cur_liab"),
     "Total Assets": ("资产总计", "总资产", "total_assets"),
-    "Cash And Cash Equivalents": ("货币资金", "money_cap", "monetary_capital", "monetary_cap", "cash", "total_cash"),
-    "Short Term Investments": ("短期投资", "交易性金融资产", "trad_asset", "short_term_investments", "st_invest"),
-    "Accounts Receivable": ("应收账款", "accounts_receiv", "accounts_recev"),
+    "Cash And Cash Equivalents": (
+        "货币资金", "money_cap", "monetary_capital", "monetary_cap", "cash", "total_cash",
+        # HK terminology
+        "现金及等价物",
+    ),
+    "Short Term Investments": (
+        "短期投资", "交易性金融资产", "trad_asset", "short_term_investments", "st_invest",
+        # HK terminology
+        "短期存款",
+    ),
+    "Accounts Receivable": (
+        "应收账款", "accounts_receiv", "accounts_recev",
+        # HK terminology (traditional/simplified variant)
+        "应收帐款",
+    ),
     "Short Term Debt": ("短期借款", "st_borr"),
     "Long Term Debt": ("长期借款", "lt_borr"),
     "Bonds Payable": ("应付债券", "bond_payable"),
     "Current Portion of Long Term Debt": ("一年内到期的非流动负债", "non_cur_liab_due_1y", "current_portion_debt"),
+    "Inventory": ("存货",),
+    "Accounts Payable": (
+        "应付账款",
+        # HK terminology
+        "应付帐款",
+    ),
 }
 
 _CASHFLOW_ALIASES = {
-    "Operating Cash Flow": ("经营活动产生的现金流量净额", "n_cashflow_act"),
+    "Operating Cash Flow": (
+        "经营活动产生的现金流量净额", "n_cashflow_act",
+        # HK terminology
+        "经营业务现金净额", "经营业务所产生之现金",
+    ),
     "Capital Expenditure": ("购建固定资产无形资产和其他长期资产支付的现金", "c_pay_acq_const_fiolta"),
     "Depreciation And Amortization": (
         "固定资产折旧、油气资产折耗、生产性生物资产折旧",
@@ -58,11 +123,97 @@ def _sort_series_by_date(s: pd.Series) -> pd.Series:
     return out.sort_index()
 
 
+def _all_known_aliases() -> set[str]:
+    """Return the set of all indicator names known to the alias dictionaries."""
+    known = set()
+    for aliases in (_INCOME_ALIASES, _BALANCE_ALIASES, _CASHFLOW_ALIASES):
+        for _field, aliases_tuple in aliases.items():
+            known.update(aliases_tuple)
+    return known
+
+
+def pivot_long_format(
+    df: pd.DataFrame,
+    name_col: str = "ind_name",
+    value_col: str = "ind_value",
+    date_col: str = "end_date",
+    extra_aliases: dict[str, tuple[str, ...]] | None = None,
+) -> pd.DataFrame:
+    """Pivot a long-format financial DataFrame to wide format.
+
+    Tushare HK/US financial APIs return data in "long format" where each row
+    is one indicator (ind_name, ind_value, end_date).  This helper pivots it
+    so that each indicator becomes a column, indexed by date — the wide format
+    that ``_get_series`` expects.
+
+    **HK alias auto-discovery**: Because HK annual report line-item names are
+    NOT standardized (different companies use different Chinese terms), this
+    function checks the actual indicator names against the known alias set
+    and emits warnings for any unmapped indicators.  Callers can pass
+    ``extra_aliases`` to register per-ticker overrides without modifying the
+    global dictionaries.
+
+    When the same indicator appears multiple times for a given date (e.g.
+    both "营业额" and "营运收入" in the source, or duplicates from the same
+    Tushare call), the **first** non-NaN value is kept.
+
+    Args:
+        df: Long-format DataFrame with indicator name, value, and date columns.
+        name_col: Column containing indicator names.
+        value_col: Column containing numeric values.
+        date_col: Column containing report dates.
+        extra_aliases: Optional per-ticker alias overrides.  Keys are canonical
+            field names (e.g. "Total Revenue"), values are tuples of additional
+            indicator names found in this specific company's data.  These are
+            merged into the global aliases at pivot time.
+
+    Returns:
+        Wide-format DataFrame suitable for ``_get_series`` and calc functions.
+    """
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    # Build the full alias set including per-ticker overrides
+    known = _all_known_aliases()
+    if extra_aliases:
+        for _field, extra_names in extra_aliases.items():
+            known.update(extra_names)
+
+    # Auto-discover: warn about unmapped indicator names
+    actual_names = set(df[name_col].dropna().unique())
+    _meta_cols = {name_col, value_col, date_col, "报告期", "end_date", "ts_code", "name"}
+    unmapped = actual_names - known - _meta_cols
+    if unmapped:
+        warnings.warn(
+            f"pivot_long_format: {len(unmapped)} unmapped indicator name(s) found. "
+            f"These names are not in the alias dictionaries and will not be matched "
+            f"by _get_series. Consider adding them via extra_aliases parameter. "
+            f"Unmapped: {sorted(unmapped)[:10]}"
+        )
+
+    pivoted = df.pivot_table(
+        index=date_col,
+        columns=name_col,
+        values=value_col,
+        aggfunc="first",
+    )
+    pivoted = pivoted.sort_index()
+    # Add convenience date columns that _get_series looks for
+    pivoted["报告期"] = pivoted.index
+    pivoted["end_date"] = pivoted.index
+    return pivoted
+
+
 def _get_series(df, field, aliases, warnings_list=None):
     """Extract a numeric series from a financial DataFrame.
 
-    Handles both yfinance (items as index rows) and akshare (items as columns).
-    Returns Series or None.
+    Handles three formats:
+    1. yfinance: items as index rows
+    2. akshare/tushare A-share: items as columns, dates in a date column
+    3. Long-format (HK/US): use ``pivot_long_format()`` first
+
+    When a column name resolves to multiple columns (DataFrame), the first
+    non-NaN value per row is used to produce a Series.
     """
     if not isinstance(df, pd.DataFrame) or df.empty:
         return None
@@ -78,7 +229,11 @@ def _get_series(df, field, aliases, warnings_list=None):
     # akshare/tushare: financial items as columns, dates in a column
     for name in all_names:
         if name in df.columns:
-            s = pd.to_numeric(df[name], errors="coerce")
+            col = df[name]
+            # Handle duplicate column names producing a DataFrame (2D)
+            if isinstance(col, pd.DataFrame):
+                col = col.apply(lambda row: row.dropna().iloc[0] if row.dropna().any() else np.nan, axis=1)
+            s = pd.to_numeric(col, errors="coerce")
             for date_col in ("报告期", "截止日期", "日期", "end_date"):
                 if date_col in df.columns:
                     s.index = pd.to_datetime(df[date_col])

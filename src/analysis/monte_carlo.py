@@ -178,8 +178,29 @@ def fit_distribution_from_percentiles(percentiles: dict, dist_type: str = "norma
     simulations stay within the analyst's intended range. Override by passing
     lower=/upper= to the returned distribution after construction.
     """
+    # ── Input validation ──
+    if not percentiles:
+        if dist_type == "lognormal":
+            return LogNormalDist(np.log(1e-4), 0.01)
+        return NormalDist(0.0, 0.01)
+
     levels = sorted(percentiles.keys())
     values = np.array([percentiles[p] for p in levels])
+
+    if dist_type == "lognormal" and np.any(values <= 0):
+        neg_keys = [p for p in levels if percentiles[p] <= 0]
+        raise ValueError(
+            f"Lognormal distribution requires all percentile values > 0. "
+            f"Non-positive at percentiles: {neg_keys}"
+        )
+
+    for i in range(1, len(levels)):
+        if not values[i] > values[i - 1]:
+            raise ValueError(
+                f"Percentile values must be strictly increasing: "
+                f"P{levels[i-1]}={percentiles[levels[i-1]]} >= "
+                f"P{levels[i]}={percentiles[levels[i]]}"
+            )
     probs = np.array(levels, dtype=float) / 100.0
 
     # Fallback for a single point
@@ -270,6 +291,7 @@ def run_monte_carlo(
     n_simulations: int = None,
     copula_df: float = None,
     seed: int | None = None,
+    store_raw_draws: bool = False,
 ) -> dict:
     """Run Monte Carlo simulation.
 
@@ -335,6 +357,8 @@ def run_monte_carlo(
             output = dict(vectorized_result)
             output["seed"] = actual_seed
             output["n_simulations"] = n_simulations
+            if store_raw_draws:
+                output["raw_draws"] = samples
             return output
     except Exception:
         pass  # model function doesn't support array inputs, fall through
@@ -355,7 +379,132 @@ def run_monte_carlo(
     output = {key: np.array(val) for key, val in results.items()}
     output["seed"] = actual_seed
     output["n_simulations"] = n_simulations
+    if store_raw_draws:
+        output["raw_draws"] = samples
     return output
+
+
+# ──────────────────────────────────────────────
+#  Multi-year cumulative simulation
+# ──────────────────────────────────────────────
+
+def _generate_samples(
+    distributions: dict[str, NormalDist | LogNormalDist],
+    names: list[str],
+    correlation_matrix: np.ndarray | None,
+    n_simulations: int,
+    copula_df: float | None,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Generate correlated samples for one simulation year via t-Copula or Gaussian."""
+    n_vars = len(names)
+    samples = np.zeros((n_simulations, n_vars))
+
+    if correlation_matrix is not None and correlation_matrix.shape == (n_vars, n_vars):
+        L = np.linalg.cholesky(correlation_matrix)
+        z = rng.standard_normal((n_simulations, n_vars))
+        correlated_z = z @ L.T
+
+        if copula_df is not None and copula_df > 2:
+            chi2 = rng.chisquare(df=copula_df, size=n_simulations)
+            scaling = np.sqrt(copula_df / chi2)
+            correlated_z = correlated_z * scaling[:, np.newaxis]
+            for i, name in enumerate(names):
+                u = _t_cdf(correlated_z[:, i], copula_df)
+                samples[:, i] = distributions[name].ppf(u)
+        else:
+            for i, name in enumerate(names):
+                samples[:, i] = distributions[name].ppf(_norm_cdf(correlated_z[:, i]))
+    else:
+        for i, name in enumerate(names):
+            samples[:, i] = distributions[name].rvs(n_simulations, rng=rng)
+
+    return samples
+
+
+def _prepare_base_state(base_state: dict, n_simulations: int) -> dict:
+    """Convert scalar base_state values to constant arrays for vectorized model_fn."""
+    prepared = {}
+    for key, val in base_state.items():
+        if isinstance(val, np.ndarray):
+            prepared[key] = val
+        else:
+            prepared[key] = np.full(n_simulations, float(val))
+    return prepared
+
+
+def run_monte_carlo_cumulative(
+    yearly_assumptions: dict[str, dict[str, NormalDist | LogNormalDist]],
+    model_fn,
+    base_state: dict | None = None,
+    correlation_matrix: np.ndarray = None,
+    n_simulations: int = None,
+    copula_df: float = None,
+    seed: int | None = None,
+    store_raw_draws: bool = False,
+) -> dict[str, dict]:
+    """Run multi-year cumulative Monte Carlo simulation with t-Copula.
+
+    Unlike run_monte_carlo() which simulates each year independently from
+    the base year, this function chains years sequentially: Year N's model
+    outputs feed into Year N+1 as prev_state.  This ensures FY2027E revenue
+    grows from FY2026E's *simulated* revenue (not the FY2025A base),
+    matching how EPS bridges compound in real financial models.
+
+    Args:
+        yearly_assumptions: {year_label: {var_name: Distribution}}.
+            Processed in insertion order.  Each year has its own distributions
+            (same variable names, different parameters).
+        model_fn: callable(inputs, prev_state) -> (outputs, state).
+            - inputs:    {var_name: np.ndarray} — stochastic draws, shape (n_sims,)
+            - prev_state: {key: np.ndarray} | None — prior year state
+            - outputs:   {key: np.ndarray} — results (target_price, eps, revenue)
+            - state:     {key: np.ndarray} — rolled forward to next year
+        base_state: Optional initial state dict.  Scalar values are broadcast
+            to constant arrays.  If None, model_fn receives None for year 1.
+        correlation_matrix: Shared across all years (same variables assumed).
+        n_simulations: Number of paths.  Default from MONTE_CARLO_SIMULATIONS.
+        copula_df: t-Copula degrees of freedom.  None = Gaussian copula.
+        seed: Master seed.  All years draw sequentially from the same RNG.
+        store_raw_draws: Include "raw_draws" array per year in output.
+
+    Returns:
+        {year_label: {key: np.ndarray, "seed": int, "n_simulations": int}}
+    """
+    if n_simulations is None:
+        n_simulations = MONTE_CARLO_SIMULATIONS
+
+    if seed is not None:
+        actual_seed = seed
+    else:
+        actual_seed = int(np.random.default_rng().integers(0, 2**63))
+
+    rng = np.random.default_rng(actual_seed)
+
+    results = {}
+    prev_state = _prepare_base_state(base_state, n_simulations) if base_state else None
+
+    for year_label, distributions in yearly_assumptions.items():
+        names = list(distributions.keys())
+
+        samples = _generate_samples(
+            distributions, names, correlation_matrix,
+            n_simulations, copula_df, rng,
+        )
+
+        inputs = {name: samples[:, i] for i, name in enumerate(names)}
+        outputs, state = model_fn(inputs, prev_state)
+
+        year_result = dict(outputs)
+        year_result["seed"] = actual_seed
+        year_result["n_simulations"] = n_simulations
+        if store_raw_draws:
+            year_result["raw_draws"] = samples
+
+        results[year_label] = year_result
+        prev_state = state
+
+    return results
 
 
 # ──────────────────────────────────────────────
@@ -364,6 +513,14 @@ def run_monte_carlo(
 
 def calc_rrr(price_distribution: np.ndarray, current_price: float) -> dict:
     """Calculate RRR and optimal position size via Kelly Criterion."""
+    if price_distribution is None or len(price_distribution) == 0:
+        return {
+            "rrr": 0.0, "p_up": 0.0, "p_down": 0.0,
+            "e_upside": 0.0, "e_downside": 0.0,
+            "kelly_full": 0.0, "kelly_half": 0.0,
+            "percentiles": {}, "current_price": current_price,
+        }
+
     upside = price_distribution - current_price
     up_mask = upside > 0
     down_mask = upside < 0
@@ -435,6 +592,9 @@ def verify_assumption_consistency(
     workspace_dir: str,
     monte_carlo_assumptions: dict,
     tolerance: float = 0.05,
+    correlation_matrix: np.ndarray | None = None,
+    copula_df: float | None = None,
+    n_simulations: int | None = None,
 ) -> dict:
     """Verify Monte Carlo assumptions match the user-reviewed matrix.
 
@@ -442,6 +602,12 @@ def verify_assumption_consistency(
     variable against the actual distributions passed to run_monte_carlo().
     New simulation variables and omitted reviewed variables are hard failures:
     the Monte Carlo model must be identical to the user-reviewed matrix.
+
+    Also validates:
+    - Correlation matrix: symmetry, positive-definiteness, unit diagonal, off-diag in [-1,1]
+    - copula_df > 2 (required for valid t-distribution scaling)
+    - n_simulations sufficiency (>= 10,000 recommended)
+    - dist_type consistency with variable naming conventions
 
     Returns {passed: bool, warnings: list, violations: list}.
     """
@@ -500,6 +666,87 @@ def verify_assumption_consistency(
                         f"change exceeds {tolerance:.0%} tolerance"
                     )
 
+    # ── P3: Extended validation checks ──
+
+    # Correlation matrix validation
+    if correlation_matrix is not None:
+        n = correlation_matrix.shape[0]
+        if correlation_matrix.shape != (n, n):
+            violations.append(
+                f"Correlation matrix is not square: shape={correlation_matrix.shape}"
+            )
+        else:
+            # Symmetry
+            if not np.allclose(correlation_matrix, correlation_matrix.T, atol=1e-8):
+                violations.append("Correlation matrix is not symmetric")
+
+            # Unit diagonal
+            diag = np.diag(correlation_matrix)
+            if not np.allclose(diag, 1.0, atol=1e-8):
+                bad = [(i, diag[i]) for i in range(n) if abs(diag[i] - 1.0) > 1e-8]
+                violations.append(
+                    f"Correlation matrix diagonal != 1.0 at: {bad}"
+                )
+
+            # Off-diagonal in [-1, 1]
+            off_diag = correlation_matrix[~np.eye(n, dtype=bool)]
+            if np.any(np.abs(off_diag) > 1.0 + 1e-8):
+                oob = np.where(np.abs(off_diag) > 1.0 + 1e-8)[0]
+                violations.append(
+                    f"Correlation matrix has {len(oob)} off-diagonal entries outside [-1, 1]"
+                )
+
+            # Positive-definiteness (Cholesky test)
+            try:
+                np.linalg.cholesky(correlation_matrix)
+            except np.linalg.LinAlgError:
+                violations.append(
+                    "Correlation matrix is not positive-definite — Cholesky decomposition failed"
+                )
+
+            # Dimension match
+            if n != len(sim_vars):
+                warnings.append(
+                    f"Correlation matrix dimension ({n}) != number of variables ({len(sim_vars)})"
+                )
+
+    # copula_df validation
+    if copula_df is not None:
+        if copula_df <= 2:
+            violations.append(
+                f"copula_df={copula_df} must be > 2 for valid t-Copula variance"
+            )
+        elif copula_df < 4:
+            warnings.append(
+                f"copula_df={copula_df} is very low — very heavy tails, "
+                f"consider >= 4 for stability"
+            )
+
+    # Simulation count sufficiency
+    if n_simulations is not None:
+        if n_simulations < 10_000:
+            warnings.append(
+                f"n_simulations={n_simulations:,} is below 10,000 — "
+                f"percentile estimates (especially P5/P95) may be noisy"
+            )
+        elif n_simulations < 50_000:
+            warnings.append(
+                f"n_simulations={n_simulations:,} — P5/P95 estimates have moderate noise; "
+                f"100,000+ recommended for production"
+            )
+
+    # dist_type consistency: PE/PB should be lognormal
+    pe_like_keywords = {"pe", "pb", "ps"}
+    for var_name, dist in monte_carlo_assumptions.items():
+        if isinstance(dist, LogNormalDist):
+            name_lower = var_name.lower()
+            is_ratio = any(kw in name_lower for kw in pe_like_keywords)
+            if not is_ratio:
+                warnings.append(
+                    f"Variable '{var_name}' uses lognormal distribution — "
+                    f"confirm this is intentional (typically only PE/PB/PS are lognormal)"
+                )
+
     passed = len(violations) == 0
 
     return {
@@ -508,7 +755,9 @@ def verify_assumption_consistency(
         "violations": violations,
         "summary": (
             "Assumptions consistent with reviewed matrix"
-            if passed
+            if passed and not warnings
+            else f"{len(violations)} violation(s), {len(warnings)} warning(s)"
+            if warnings
             else f"{len(violations)} violation(s): post-review assumption drift detected"
         ),
     }

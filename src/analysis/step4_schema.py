@@ -90,8 +90,9 @@ STEP4_SCHEMA_DESCRIPTION = {
             "other_ncl_ratio",
             "st_debt",
             "lt_debt",
+            "fx_rate",
         ],
-        "note": "diluted_shares is required (not defaulted). ar_days/inv_days/ap_days drive BS formula-linked items; if absent, BS items are hard-coded with a warning.",
+        "note": "diluted_shares is required (not defaulted). ar_days/inv_days/ap_days drive BS formula-linked items; if absent, BS items are hard-coded with a warning. fx_rate is required for non-A-share stocks (HK/US) — converts RMB financials to trading currency.",
     },
 }
 
@@ -266,6 +267,7 @@ def generate_step4_template() -> dict[str, Any]:
             "interest_rate_on_debt": 0.05,
             "interest_rate_on_cash": 0.02,
             "annual_share_dilution_pct": 0.01,
+            "fx_rate": None,
         },
         "valuation_source": {
             "pe_calculated": True,

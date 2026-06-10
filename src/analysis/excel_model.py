@@ -192,12 +192,19 @@ def _extract_driver_values(
     contribution_pct-only mode is BLOCKED — the analyst must return to Step 4
     and provide explicit driver data.
     """
+    # T+N → FY period mapping for growth field lookup
+    tn_to_fy = {}
+    for i, p in enumerate(periods, start=1):
+        tn_to_fy[f"T+{i}"] = p
+        tn_to_fy[f"T{i}"] = p
+
     enriched = []
     for d in drivers:
         name = str(d.get("name", "Driver"))
         derivation = str(d.get("derivation", ""))
         contrib = _num(d.get("contribution_pct"), 0.0)
-        # contribution_pct is stored as whole-number (20 = 20%)
+        # contribution_pct is stored as decimal (0.04 = 4pp contribution)
+        # legacy: sometimes stored as whole-number (20 = 20%)
         if abs(contrib) > 1.0:
             contrib = contrib / 100.0
 
@@ -205,7 +212,16 @@ def _extract_driver_values(
         unit = str(d.get("unit", ""))
         growths: dict[str, float] = {}
         for p in periods:
-            g = d.get(f"growth_{p}") or d.get(f"{p}_growth")
+            # Try: growth_FY2026E, FY2026E_growth, then growth_T+N aliases
+            g = (d.get(f"growth_{p}") or d.get(f"{p}_growth")
+                 or d.get(f"growth_{tn_to_fy.get(p, '')}"))
+            # Also try the T+N key directly
+            if g is None:
+                for tn_key, fy_key in tn_to_fy.items():
+                    if fy_key == p:
+                        g = d.get(f"growth_{tn_key}")
+                        if g is not None:
+                            break
             if g is not None:
                 growth = _num(g)
                 if abs(growth) > 1.0:
@@ -221,6 +237,24 @@ def _extract_driver_values(
                 "contribution_pct": contrib,
                 "derivation": derivation,
                 "mode": "explicit",
+            })
+        elif len(growths) >= len(periods) and contrib > 0 and base_revenue > 0:
+            # Fallback: derive base_value from contribution_pct × base revenue
+            # contribution_pct is decimal growth contribution (0.04 = 4pp of segment growth)
+            # base_value ≈ contrib / growth_rate_of_first_period × base_revenue
+            first_growth = growths.get(periods[0], 0)
+            if first_growth > 0:
+                driver_base = base_revenue * (contrib / first_growth)
+            else:
+                driver_base = base_revenue * contrib
+            enriched.append({
+                "name": name,
+                "unit": unit,
+                "base_value": driver_base,
+                "growths": growths,
+                "contribution_pct": contrib,
+                "derivation": f"[Derived from contribution_pct] {derivation}",
+                "mode": "contribution_derived",
             })
         else:
             raise ValueError(

@@ -224,7 +224,7 @@ After completing 1.1-1.7, answer these two core questions (max 150 words):
 
 在撰写 Step 1 分析之前，调用以下 MCP 工具获取结构化业务数据，补充 PDF 年报提取和 CLI fetch。
 
-### 数据获取步骤
+### A 股数据获取步骤
 
 ```
 1. mcp__tushareMcp__fina_mainbz(ts_code="{ts_code}", type="P")
@@ -254,7 +254,41 @@ After completing 1.1-1.7, answer these two core questions (max 150 words):
 
 8. mcp__tushareMcp__pledge_detail(ts_code="{ts_code}")
    → 股权质押明细（质押比例高的股东 = 风险信号）
+```
 
+### 港股数据获取步骤
+
+**注意**：Tushare A 股专用 API（fina_mainbz、top10_holders 等）对港股返回空结果。港股数据需走以下路径：
+
+```
+1. 财务数据：已在 CLI fetch 阶段下载到 financials_income.csv / financials_balance_sheet.csv / financials_cashflow.csv
+   → 使用 pivot_long_format() 转换后传入 calc_earnings_quality() 等函数
+   → 注意：港股年报科目命名不统一（不同公司用不同术语），financial.py alias 为 best-effort
+
+2. 股东/分红/质押：WebSearch 替代
+   → 搜索 "{公司名} 前十大股东 {年份}" / "{公司名} 分红历史"
+   → 数据来源：港交所披露易、公司年报、Wind/富途
+
+3. 南向资金：Tushare 可用
+   → mcp__tushareMcp__moneyflow_hsgt(trade_date="{date}")  → 北向/南向资金流
+   → mcp__tushareMcp__hk_hold(ts_code="{ts_code}")  → 沪深港通持股明细
+```
+
+### 美股数据获取步骤
+
+```
+1. 财务数据：WebSearch + SEC EDGAR 获取 10-K/10-Q
+   → AKShare stock_us_daily() 获取行情
+   → financial-analysis skills 辅助 DCF/comps
+
+2. 机构持仓：WebSearch 搜索 "{ticker} institutional holdings 13F"
+
+3. 内部人交易：WebSearch 搜索 "{ticker} insider trading SEC Form 4"
+```
+
+### 通用工具（所有市场）
+
+```
 9. mcp__web-reader__webReader(url="{公司 IR 页面 URL}")
    → 当 PDF 读取失败时，从公司 IR 页面获取年报内容
 
@@ -266,4 +300,4 @@ After completing 1.1-1.7, answer these two core questions (max 150 words):
 
 1. `fina_mainbz` 返回分部数据，应与年报 MD&A 交叉验证，不一致时以年报为准
 2. 所有 MCP 数据均须通过 `MaterialTracker.record_extraction()` 记录来源
-3. 市场适配：A 股使用全部 API；港股用 `hk_basic`/`hk_income`/`hk_balancesheet`；美股用 `us_income`/`us_balancesheet`/`us_cashflow`
+3. **港股科目命名不统一**：`financial.py` alias 为 best-effort 映射，无法覆盖所有港股公司用词。遇到 alias 未命中时，手动 pivot CSV 并检查 `ind_name` 列中的实际科目名，补充映射。

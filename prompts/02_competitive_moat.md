@@ -83,35 +83,91 @@ Evaluate each moat type below for existence and strength:
 - Are entry barriers rising or falling? Why?
 - Potential disruptors or substitute threats
 
-### 2.3.1 Comparable Company Analysis (Mandatory Skill)
+### 2.3.1 Comparable Company Analysis (Two-Step CLI Workflow)
 
-After completing the qualitative competitive landscape above, **must** invoke `comps-analysis` skill to produce a structured peer valuation table:
+After completing the qualitative competitive landscape above, produce a structured peer valuation table using the **two-step CLI workflow**:
 
+#### Step A: Prepare `step2_comps_data.json`
+
+Manually create `step2_comps_data.json` in the workspace with peer financial data. Schema:
+
+```json
+{
+  "version": 1,
+  "date": "YYYY-MM-DD",
+  "benchmark_year": "FY2026E",
+  "benchmark_label": "FY2026E Forward PE",
+  "peer_selection": {
+    "included": ["ticker1", "ticker2"],
+    "excluded": [{"name": "Company", "reason": "Private, no data"}],
+    "criteria": "Selection rationale"
+  },
+  "peers": [
+    {
+      "ticker": "09992.HK",
+      "name": "Pop Mart",
+      "name_zh": "泡泡玛特",
+      "market": "HKEX",
+      "ccy": "HKD",
+      "is_target": true,
+      "price": 170.5,
+      "price_date": "YYYY-MM-DD",
+      "mcap_bn_usd": 29.1,
+      "fy_end": "Dec 31",
+      "financials": {
+        "FY2025A": {
+          "revenue_bn": 37.12, "revenue_ccy": "RMB", "rev_yoy": 184.7,
+          "eps": 10.43, "gm_pct": 72.1, "nm_pct": 34.4, "roe_pct": 77.5
+        },
+        "FY2026E": {
+          "revenue_bn": 43.37, "rev_yoy": 16.8,
+          "eps": 10.86, "source": "Yahoo Finance", "as_of": "2026-06-09"
+        },
+        "FY2027E": {
+          "revenue_bn": 50.71, "rev_yoy": 16.9,
+          "eps": 13.30, "source": "Yahoo Finance", "as_of": "2026-06-09"
+        }
+      },
+      "notes": "EPS calculation methodology"
+    }
+  ]
+}
 ```
-Skill("financial-analysis:comps-analysis", args="{ticker} 可比公司分析，同业：{peer1}, {peer2}, {peer3}")
+
+**Data discipline**:
+- All EPS values must be from identifiable sources (Yahoo Finance consensus, StockAnalysis.com, Bloomberg, etc.)
+- Record `as_of` date for every forward estimate — enables automatic staleness detection
+- Exclude private companies with no public financial data
+- Use standardized 3-year view: **FY2025A (actual) → FY2026E (forward) → FY2027E (forward)**
+
+#### Step B: Generate xlsx + summary
+
+```bash
+python -m src.cli comps {workspace}
 ```
 
-**Output artifacts** (saved to workspace):
+**Output artifacts** (auto-generated):
 - `step2_comps_analysis.xlsx` — professional comps Excel with:
-  - Valuation multiples: PE, PB, PS, EV/EBITDA (all self-calculated per valuation discipline)
-  - Statistical benchmarks: Max / 75th / Median / 25th / Min for each metric
-  - Growth & profitability metrics: Revenue growth, EBITDA margin, Net margin, ROE, ROIC
-  - Industry-specific metrics where relevant (e.g., SaaS: ARR per employee; Banks: NPL ratio; Retail: same-store sales)
-  - Source citations with hyperlinks to SEC filings / annual reports
-- `step2_comps_summary.md` — 3-5 sentence summary of relative positioning
+  - Self-calculated PE ratios (Current Price ÷ EPS, tagged `source: calculated`)
+  - Revenue, margins, EPS across FY2025A/FY2026E/FY2027E
+  - Target premium analysis vs peer median
+  - Data freshness indicators (🟢 ≤90d, 🟡 91-180d, 🔴 >180d)
+  - Raw Data sheet with per-metric source and date tracking
+- `step2_comps_summary.md` — markdown summary with PE tables, revenue growth, margins, freshness
 
 **Integration rules**:
-1. Peer list from MCP 同业识别 (section above) feeds into comps-analysis as the peer universe
-2. All multiples in the comps Excel must be self-calculated (`calc_pe`, `calc_pb`, etc.) — tag every cell `source: calculated`
-3. Statistical benchmarks (median, quartiles) set the **valuation corridor** that flows directly into:
+1. Peer list from competitive landscape (2.3) feeds into `step2_comps_data.json` as the peer universe
+2. All PE ratios are self-calculated by the CLI using `calc_pe()` — no manual PE entry
+3. Statistical benchmarks (peer median/mean) set the **valuation corridor** that flows into:
    - Step 2 "Moat → Valuation Constraint" PE Reasonable Ceiling
    - Step 4 assumption ranges
    - Step 5 valuation sheet peer column
 4. If the company trades at a premium to median, the premium must be justified by moat rating (2.1) or growth differential (2.5) — otherwise flag as **unjustified premium risk**
-5. Market adaptation:
-   - **A-share**: Tushare MCP provides all financial data; comps-analysis uses it as input
-   - **HK**: AKShare `stock_hk_valuation_comparison_em()` + `stock_hk_growth_comparison_em()` as data source; comps-analysis formats the output
-   - **US**: WebSearch + SEC EDGAR as data source; comps-analysis pulls and structures the data
+5. Data staleness: Mattel/Funko estimates from 2025 are automatically flagged 🔴 — refresh before relying on them
+6. Market adaptation for data gathering:
+   - **A-share**: Tushare MCP `daily_basic`, `fina_indicator`, `income` for financial data
+   - **HK**: AKShare `stock_hk_financial_indicator_em()` + Yahoo Finance for consensus EPS
+   - **US**: WebSearch + SEC EDGAR for financial statements; Yahoo Finance/StockAnalysis.com for consensus
 
 ### 2.4 Pricing Power Verification
 - Has the company been able to raise prices above inflation over the past 3-5 years? (Specific price change data)

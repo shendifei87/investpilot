@@ -80,3 +80,27 @@ MONTE_CARLO_SIMULATIONS = int(os.getenv("MC_SIMS", "100000"))
 
 # ── Cache ────────────────────────────────────────────────────────
 CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "24"))
+
+# ── Model Validation ──────────────────────────────────────────────
+MODEL_VALIDATION = {
+    # Hybrid tolerance pattern: tolerance = max(atol, rtol × |expected|)
+    # atol = absolute floor (prevents near-zero blowup)
+    # rtol = relative tolerance (scales with value magnitude)
+    "financials": {  # COGS, EBIT, FCF, etc. (in millions)
+        "atol": float(os.getenv("MODEL_VAL_FIN_ATOL", "5.0")),    # 5M RMB
+        "rtol": float(os.getenv("MODEL_VAL_FIN_RTOL", "0.001")),  # 0.1%
+    },
+    "eps": {  # EPS Basic / Diluted (in RMB per share)
+        "atol": float(os.getenv("MODEL_VAL_EPS_ATOL", "0.01")),   # 0.01 RMB
+        "rtol": float(os.getenv("MODEL_VAL_EPS_RTOL", "0.02")),   # 2%
+    },
+    "target_price": {  # Target price (in trading currency)
+        "atol": float(os.getenv("MODEL_VAL_TP_ATOL", "0.5")),     # 0.5 HKD/USD
+        "rtol": float(os.getenv("MODEL_VAL_TP_RTOL", "0.01")),    # 1%
+    },
+    "gross_margin": {  # Ratio — pure atol is fine, no scaling needed
+        "atol": float(os.getenv("MODEL_VAL_GM_ATOL", "0.001")),   # 0.1pp
+        "rtol": 0.0,
+    },
+    "bs_gap_pct": float(os.getenv("MODEL_VAL_BS_GAP", "0.02")),   # 2% (WARN threshold)
+}

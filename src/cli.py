@@ -520,6 +520,33 @@ def cmd_excel_model(args):
     }, ensure_ascii=False, indent=2))
 
 
+def cmd_verify_model(args):
+    """Run post-model validation checks on an existing forecast_model.json."""
+    from src.analysis.financial_model import validate_financial_model
+
+    ws_path = _resolve_workspace(args.workspace)
+    model_path = ws_path / "forecast_model.json"
+    if not model_path.exists():
+        print(json.dumps({"error": f"forecast_model.json not found in {ws_path}"}))
+        sys.exit(1)
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    results = validate_financial_model(model, workspace=ws_path)
+    fails = [v for v in results if v["status"] == "FAIL"]
+    warns = [v for v in results if v["status"] == "WARN"]
+    ok_count = sum(1 for v in results if v["status"] == "OK")
+    output = {
+        "total": len(results),
+        "ok": ok_count,
+        "warn": len(warns),
+        "fail": len(fails),
+        "passed": len(fails) == 0,
+        "results": results if args.verbose else [v for v in results if v["status"] != "OK"],
+    }
+    print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
+    if fails:
+        sys.exit(1)
+
+
 def cmd_workflow(args):
     """Manage sequential research workflow state."""
     from src.analysis.research_workflow import ResearchWorkflow
@@ -832,6 +859,452 @@ def cmd_fetch_peers(args):
     print(json.dumps(summary, indent=2))
 
 
+def cmd_comps(args):
+    """Generate comps xlsx + summary md from step2_comps_data.json."""
+    from src.analysis.comps import run_comps
+
+    ws_path = _resolve_workspace(args.workspace)
+    if not (ws_path / "step2_comps_data.json").exists():
+        print(f"Error: step2_comps_data.json not found in {ws_path}")
+        print("Create it first with peer financial data (see prompts/02_competitive_moat.md).")
+        return 1
+
+    try:
+        result = run_comps(ws_path)
+        print(f"✅ Comps generated successfully:")
+        print(f"   XLSX:    {result['xlsx']}")
+        print(f"   Summary: {result['summary_md']}")
+        print(f"   Benchmark: {result['benchmark']}")
+        if result["target_pe"] is not None:
+            print(f"   Target PE: {result['target_pe']}x | Peer Median: {result['peer_median_pe']}x")
+            if result["premium_pct"] is not None:
+                direction = "premium" if result["premium_pct"] > 0 else "discount"
+                print(f"   Target {direction}: {abs(result['premium_pct']):.1f}% vs peer median")
+        return 0
+    except Exception as e:
+        print(f"Error generating comps: {e}")
+        return 1
+
+
+def cmd_mc(args):
+    """Run Monte Carlo simulation from reviewed assumptions."""
+    import numpy as np
+    from src.storage import AtomicJSON
+    from src.analysis.monte_carlo import (
+        fit_distribution_from_percentiles,
+        run_monte_carlo_cumulative,
+        calc_rrr,
+    )
+
+    ws_path = _resolve_workspace(args.workspace)
+    store = AtomicJSON(ws_path)
+
+    # ── Load reviewed assumptions ──
+    reviewed = store.load("_reviewed_assumptions.json")
+    if not reviewed:
+        print(f"Error: _reviewed_assumptions.json not found in {ws_path}")
+        print("Run Step 4 and lock assumptions first.")
+        return 1
+
+    matrix = reviewed.get("assumption_matrix", [])
+    if not matrix:
+        print("Error: assumption_matrix is empty in _reviewed_assumptions.json")
+        return 1
+
+    # Default dist_type per variable (can be overridden by schema field)
+    default_dist_types = reviewed.get("dist_types", {})
+    lognormal_keywords = {"pe", "pb", "ps", "ev/", "multiple", "market_cap", "mv"}
+
+    def infer_dist_type(var_name: str) -> str:
+        """Infer distribution type from variable name or explicit schema."""
+        if var_name in default_dist_types:
+            return default_dist_types[var_name]
+        name_lower = var_name.lower()
+        if any(kw in name_lower for kw in lognormal_keywords):
+            return "lognormal"
+        return "normal"
+
+    # ── Group assumptions by year ──
+    yearly_rows: dict[str, list[dict]] = {}
+    for row in matrix:
+        year = row.get("year")
+        if year:
+            yearly_rows.setdefault(year, []).append(row)
+
+    years = sorted(yearly_rows.keys())
+    if not years:
+        print("Error: no years found in assumption_matrix")
+        return 1
+
+    print(f"Years: {years}")
+    print(f"Variables per year: {len(yearly_rows[years[0]])}")
+
+    # ── PE coverage check ──
+    pe_var_names = {r["variable"] for r in matrix
+                    if " pe" in f" {r['variable'].lower()}"}
+    for yr in years:
+        yr_vars = {r["variable"] for r in yearly_rows[yr]}
+        missing_pe = pe_var_names - yr_vars
+        if missing_pe:
+            print(f"⚠️  {yr}: PE variable(s) {missing_pe} missing — "
+                  f"target price will be unreliable for this year")
+
+    # ── Build distributions per year ──
+    yearly_dists: dict[str, dict] = {}
+    for yr in years:
+        dists = {}
+        for row in yearly_rows[yr]:
+            var = row["variable"]
+            pcts = {k: v for k, v in row.items() if k.startswith("p") and k[1:].isdigit()}
+            # Convert percentile keys to int levels
+            pct_dict = {}
+            for k, v in pcts.items():
+                level = int(k[1:])
+                pct_dict[level] = v
+            if not pct_dict:
+                continue
+            dt = infer_dist_type(var)
+            dists[var] = fit_distribution_from_percentiles(pct_dict, dist_type=dt)
+        yearly_dists[yr] = dists
+
+    # ── Validate: all years must have same variables ──
+    var_sets = [set(d.keys()) for d in yearly_dists.values()]
+    if len(set(frozenset(s) for s in var_sets)) > 1:
+        print("⚠️  Variable sets differ across years:")
+        for yr, vs in zip(years, var_sets):
+            print(f"   {yr}: {sorted(vs)}")
+
+    # ── Load model parameters from reviewed assumptions ──
+    eps_bridge = reviewed.get("eps_bridge_p50", {})
+    shares_m = reviewed.get("shares_m")
+    fx = reviewed.get("fx_rmb_to_hkd", 1.0)
+    current_price = reviewed.get("current_price_hkd", 0.0)
+
+    if not shares_m:
+        print("Error: shares_m not in _reviewed_assumptions.json")
+        return 1
+    if not current_price:
+        print("Error: current_price_hkd not in _reviewed_assumptions.json")
+        return 1
+
+    # ── Build base_state from forecast_model.json segments ──
+    forecast_model = store.load("forecast_model.json")
+    base_state = {"shares_m": float(shares_m), "fx_rmb_to_hkd": float(fx)}
+
+    # Collect unique revenue growth variable names
+    rev_growth_vars = set()
+    for row in matrix:
+        var = row["variable"]
+        if "growth" in var.lower() and "revenue" in var.lower():
+            rev_growth_vars.add(var)
+
+    # Build segment slug → base_revenue from forecast_model.json
+    seg_slug_to_base: dict[str, float] = {}
+    if forecast_model and "segments" in forecast_model:
+        for seg in forecast_model["segments"]:
+            seg_name = seg["name"].lower().replace(" ", "_")
+            base_rev = seg.get("base_revenue", 0)
+            key = f"base_revenue_{seg_name}"
+            base_state[key] = float(base_rev)
+            seg_slug_to_base[seg_name] = float(base_rev)
+            print(f"   Segment: {seg['name']} → {key} = {base_rev:.0f} RMB M")
+
+    # Build var_to_seg_key with fuzzy matching
+    var_to_seg_key: dict[str, str] = {}
+    for var in rev_growth_vars:
+        var_slug = var.lower().replace("revenue growth", "").strip().replace(" ", "_")
+        candidate_key = f"base_revenue_{var_slug}"
+
+        if candidate_key in base_state:
+            # Exact match (e.g. "China Domestic Revenue Growth" → "china_domestic")
+            var_to_seg_key[var] = candidate_key
+        else:
+            # Fuzzy: check if any segment slug is contained in the var slug or vice versa
+            matched = False
+            for seg_slug in seg_slug_to_base:
+                if seg_slug in var_slug or var_slug in seg_slug:
+                    match_key = f"base_revenue_{seg_slug}"
+                    var_to_seg_key[var] = match_key
+                    matched = True
+                    break
+            if not matched and var_slug == "total":
+                # "Total Revenue Growth" → aggregate all segment bases
+                total_base = sum(seg_slug_to_base.values())
+                base_state["base_revenue_total"] = total_base
+                var_to_seg_key[var] = "base_revenue_total"
+                print(f"   Total base revenue (sum of segments): {total_base:.0f} RMB M")
+                matched = True
+            if not matched:
+                print(f"⚠️  {var}: no matching segment base revenue — will default to 0")
+
+    # Fallback: no segments but has "Total Revenue Growth" → try total_base_revenue
+    if not seg_slug_to_base and rev_growth_vars:
+        total_base = forecast_model.get("total_base_revenue", 0) if forecast_model else 0
+        if not total_base and forecast_model:
+            # Try periods[0].revenue as base
+            periods = forecast_model.get("periods", [])
+            if periods and "revenue" in periods[0]:
+                total_base = periods[0]["revenue"]
+        if total_base:
+            base_state["base_revenue_total"] = float(total_base)
+            for var in rev_growth_vars:
+                var_slug = var.lower().replace("revenue growth", "").strip().replace(" ", "_")
+                var_to_seg_key[var] = f"base_revenue_{var_slug}"
+                if f"base_revenue_{var_slug}" not in base_state:
+                    base_state[f"base_revenue_{var_slug}"] = float(total_base)
+            print(f"   Total base revenue (fallback): {total_base:.0f} RMB M")
+
+    print(f"   Var→seg mapping: {var_to_seg_key}")
+
+    def default_model_fn(inputs, prev_state):
+        """Default P&L model: Revenue → GP → EBIT → NI → EPS → TP.
+
+        Handles three valuation approaches (first match wins):
+        1. PE × EPS (standard)
+        2. PB × BPS (for banks / financials)
+        3. PS × Revenue/shares (for pre-profit companies)
+
+        Revenue segments chain cumulatively: each year's revenue becomes
+        next year's base. Growth-rate variables map to segments via
+        var_to_seg_key.
+        """
+        prev = prev_state if prev_state is not None else base_state
+
+        shares = prev.get("shares_m", base_state["shares_m"])
+        fx_rate = prev.get("fx_rmb_to_hkd", base_state["fx_rmb_to_hkd"])
+        n = len(next(iter(inputs.values())))
+
+        # Build revenue from growth-rate variables
+        total_revenue = np.zeros(n)
+        revenue_by_seg: dict[str, np.ndarray] = {}
+        for var_name, values in inputs.items():
+            seg_key = var_to_seg_key.get(var_name)
+            if seg_key is None:
+                continue  # not a revenue growth variable
+
+            # Get base from prev_state (chained) or initial base_state
+            seg_base = prev.get(seg_key, base_state.get(seg_key, 0))
+            if isinstance(seg_base, (int, float)):
+                seg_base = np.full(n, float(seg_base))
+
+            seg_rev = seg_base * (1 + values)
+            revenue_by_seg[var_name] = seg_rev
+            total_revenue += seg_rev
+
+        # If no revenue growth vars at all, try using prev_state's total revenue
+        if not revenue_by_seg and "total_revenue_rmb_m" in prev:
+            total_revenue = prev["total_revenue_rmb_m"]
+            if isinstance(total_revenue, (int, float)):
+                total_revenue = np.full(n, float(total_revenue))
+
+        # Gross margin
+        gm_key = next((k for k in inputs if "gross margin" in k.lower()), None)
+        gm = inputs[gm_key] if gm_key else np.full(n, 0.50)
+        gross_profit = total_revenue * gm
+
+        # OpEx
+        opex_key = next((k for k in inputs if "opex" in k.lower()), None)
+        opex_ratio = inputs[opex_key] if opex_key else np.full(n, 0.30)
+        ebit = gross_profit - total_revenue * opex_ratio
+
+        # Tax
+        tax_key = next((k for k in inputs if "tax" in k.lower()), None)
+        tax_rate = inputs[tax_key] if tax_key else np.full(n, 0.25)
+        net_income = ebit * (1 - tax_rate)
+
+        # EPS = NI_RMB_M / shares_M (same unit → RMB per share)
+        eps_rmb = net_income / shares
+
+        # BPS = total equity / shares (for PB valuation)
+        bps_rmb = prev.get("bps_rmb", 0)
+        if isinstance(bps_rmb, (int, float)):
+            bps_rmb = np.full(n, float(bps_rmb)) if bps_rmb else None
+        elif isinstance(bps_rmb, np.ndarray):
+            pass
+        else:
+            bps_rmb = None
+
+        # Target price — try PE first, then PB, then PS
+        # PE: match "PE" as a word, not substring of "opex"
+        pe_key = next((k for k in inputs
+                       if k.lower() in ("forward pe", "pe", "trailing pe")
+                       or " pe" in f" {k.lower()}"), None)
+        # PB: match "PB" as a word
+        pb_key = next((k for k in inputs
+                       if k.lower() in ("forward pb", "pb", "trailing pb")
+                       or " pb" in f" {k.lower()}"), None)
+        # PS: match "PS" as a word
+        ps_key = next((k for k in inputs
+                       if k.lower() in ("forward ps", "ps", "trailing ps")
+                       or " ps" in f" {k.lower()}"), None)
+
+        if pe_key:
+            pe = inputs[pe_key]
+            target_price_hkd = eps_rmb * pe * fx_rate
+        elif pb_key and bps_rmb is not None:
+            pb = inputs[pb_key]
+            target_price_hkd = bps_rmb * pb * fx_rate
+        elif ps_key:
+            ps = inputs[ps_key]
+            rev_per_share = total_revenue / shares
+            target_price_hkd = rev_per_share * ps * fx_rate
+        else:
+            target_price_hkd = np.full(n, np.nan)
+
+        outputs = {
+            "target_price_hkd": target_price_hkd,
+            "eps_rmb": eps_rmb,
+            "revenue_rmb_m": total_revenue,
+            "net_income_rmb_m": net_income,
+        }
+        # State for next year: updated revenue bases
+        state = {
+            "shares_m": shares if isinstance(shares, np.ndarray) else np.full(n, float(shares)),
+            "fx_rmb_to_hkd": fx_rate if isinstance(fx_rate, np.ndarray) else np.full(n, float(fx_rate)),
+            "total_revenue_rmb_m": total_revenue,
+        }
+        for var_name, seg_rev in revenue_by_seg.items():
+            seg_key = var_to_seg_key[var_name]
+            state[seg_key] = seg_rev
+
+        return outputs, state
+
+    # ── Build correlation matrix from reviewed assumptions ──
+    corr_matrix = None
+    corr_defs = reviewed.get("correlations_defined", [])
+    var_order = reviewed.get("variable_order", [])
+
+    if corr_defs and var_order:
+        n_vars = len(var_order)
+        corr_matrix = np.eye(n_vars)
+        var_idx = {v: i for i, v in enumerate(var_order)}
+        for v1, v2, rho in corr_defs:
+            if v1 in var_idx and v2 in var_idx:
+                i, j = var_idx[v1], var_idx[v2]
+                corr_matrix[i, j] = rho
+                corr_matrix[j, i] = rho
+
+        # Validate
+        try:
+            np.linalg.cholesky(corr_matrix)
+            print(f"   Correlation matrix: {n_vars}×{n_vars}, PD ✓")
+        except np.linalg.LinAlgError:
+            print(f"⚠️  Correlation matrix not positive-definite — falling back to independent")
+            corr_matrix = None
+    else:
+        print(f"   No correlations_defined in reviewed assumptions — running independent")
+
+    # ── Run simulation ──
+    n_sims = int(args.sims) if args.sims else 100_000
+    seed = int(args.seed) if args.seed else None
+
+    print(f"Running {n_sims} simulations per year (cumulative mode)...")
+
+    results = run_monte_carlo_cumulative(
+        yearly_dists,
+        default_model_fn,
+        base_state=base_state,
+        correlation_matrix=corr_matrix,
+        n_simulations=n_sims,
+        copula_df=6,
+        seed=seed,
+    )
+
+    # ── Compute percentiles and RRR ──
+    output = {
+        "ticker": reviewed.get("ticker", str(ws_path.name)),
+        "current_price_hkd": current_price,
+        "fx_rmb_to_hkd": fx,
+        "n_simulations": n_sims,
+        "copula_df": 6,
+        "mode": "cumulative",
+        "variable_order": var_order,
+        "correlations_defined": corr_defs,
+        "dist_types": {k: infer_dist_type(k) for k in (var_order or yearly_dists.get(years[0], {}).keys())},
+        "per_year": {},
+    }
+
+    for yr in years:
+        yr_result = results[yr]
+        tp = yr_result["target_price_hkd"]
+        eps = yr_result["eps_rmb"]
+        rev = yr_result["revenue_rmb_m"]
+
+        # Handle years without PE (NaN target prices)
+        valid_tp = tp[~np.isnan(tp)]
+        has_tp = len(valid_tp) > 0
+
+        if has_tp:
+            rrr_result = calc_rrr(valid_tp, current_price)
+            yr_output_tp = {
+                "p5": round(float(np.percentile(valid_tp, 5)), 2),
+                "p10": round(float(np.percentile(valid_tp, 10)), 2),
+                "p25": round(float(np.percentile(valid_tp, 25)), 2),
+                "p50": round(float(np.percentile(valid_tp, 50)), 2),
+                "p75": round(float(np.percentile(valid_tp, 75)), 2),
+                "p90": round(float(np.percentile(valid_tp, 90)), 2),
+                "p95": round(float(np.percentile(valid_tp, 95)), 2),
+                "mean": round(float(np.mean(valid_tp)), 2),
+                "std": round(float(np.std(valid_tp)), 2),
+            }
+            yr_rrr = {
+                "rrr": round(rrr_result["rrr"], 4),
+                "p_up": round(rrr_result["p_up"], 4),
+                "p_down": round(rrr_result["p_down"], 4),
+                "e_upside": round(rrr_result["e_upside"], 2),
+                "e_downside": round(rrr_result["e_downside"], 2),
+                "kelly_full": round(rrr_result["kelly_full"], 4),
+                "kelly_half": round(rrr_result["kelly_half"], 4),
+            }
+        else:
+            yr_output_tp = {"note": "No PE variable for this year — target price not computable"}
+            yr_rrr = {
+                "rrr": 0.0, "p_up": 0.0, "p_down": 0.0,
+                "e_upside": 0.0, "e_downside": 0.0,
+                "kelly_full": 0.0, "kelly_half": 0.0,
+                "note": "No PE — RRR not applicable",
+            }
+
+        output["per_year"][yr] = {
+            "target_price_hkd": yr_output_tp,
+            "eps_rmb": {
+                "p10": round(float(np.percentile(eps, 10)), 2),
+                "p50": round(float(np.percentile(eps, 50)), 2),
+                "p90": round(float(np.percentile(eps, 90)), 2),
+                "mean": round(float(np.mean(eps)), 2),
+            },
+            "revenue_rmb_m": {
+                "p10": round(float(np.percentile(rev, 10)), 1),
+                "p50": round(float(np.percentile(rev, 50)), 1),
+                "p90": round(float(np.percentile(rev, 90)), 1),
+                "mean": round(float(np.mean(rev)), 1),
+            },
+            "rrr": yr_rrr,
+            "seed": yr_result["seed"],
+        }
+
+    # ── Save results ──
+    store.save("monte_carlo_results.json", output)
+    results_path = ws_path / "monte_carlo_results.json"
+
+    # ── Print summary ──
+    print(f"\n✅ Monte Carlo simulation complete (cumulative mode)")
+    print(f"   Output: {results_path}")
+    print(f"   Simulations: {n_sims:,}")
+    print()
+    for yr in years:
+        yr_data = output["per_year"][yr]
+        tp_dict = yr_data["target_price_hkd"]
+        rrr_val = yr_data["rrr"]["rrr"]
+        kelly = yr_data["rrr"]["kelly_half"]
+        if "p50" in tp_dict:
+            print(f"   {yr}: P50 TP = HK${tp_dict['p50']:.0f} | RRR = {rrr_val:.2f} | Kelly½ = {kelly:.1%}")
+        else:
+            print(f"   {yr}: [No PE] P50 EPS = ¥{yr_data['eps_rmb']['p50']:.2f} | Revenue = {yr_data['revenue_rmb_m']['p50']:.0f}")
+
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="InvestPilot — Investment Research Tools")
     subparsers = parser.add_subparsers(dest="command")
@@ -1026,6 +1499,14 @@ def main():
     p_excel.add_argument("--ticker", "-t", help="Ticker symbol")
     p_excel.set_defaults(func=cmd_excel_model)
 
+    p_verify_model = subparsers.add_parser(
+        "verify-model",
+        help="Run post-model validation checks on forecast_model.json",
+    )
+    p_verify_model.add_argument("workspace", help="Workspace directory name or path")
+    p_verify_model.add_argument("--verbose", "-v", action="store_true", help="Show all checks including OK")
+    p_verify_model.set_defaults(func=cmd_verify_model)
+
     p_workflow = subparsers.add_parser("workflow", help="Guard sequential research workflow")
     p_workflow.add_argument("workspace", help="Workspace directory name or path")
     p_workflow.add_argument("action", choices=["status", "sync", "can-start", "start", "complete", "block"])
@@ -1047,6 +1528,24 @@ def main():
     p_verify.add_argument("--timeout", type=int, default=15, help="HTTP 超时秒数")
     p_verify.add_argument("--json", action="store_true", help="输出 JSON 格式")
     p_verify.set_defaults(func=cmd_verify_news)
+
+    # ── Comps generation ─────────────────────────────
+    p_comps = subparsers.add_parser(
+        "comps",
+        help="Generate peer comps xlsx + summary from step2_comps_data.json",
+    )
+    p_comps.add_argument("workspace", help="Workspace directory name or path")
+    p_comps.set_defaults(func=cmd_comps)
+
+    # ── Monte Carlo simulation ──────────────────────
+    p_mc = subparsers.add_parser(
+        "mc",
+        help="Run cumulative Monte Carlo simulation from reviewed assumptions",
+    )
+    p_mc.add_argument("workspace", help="Workspace directory name or path")
+    p_mc.add_argument("--sims", type=int, default=100000, help="Number of simulations (default: 100000)")
+    p_mc.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    p_mc.set_defaults(func=cmd_mc)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

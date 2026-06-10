@@ -72,25 +72,22 @@ Step 0 does **not** replace formal valuation. Never use news/reports/API-provide
 
 ### Report Generation (🚨 HARD RULE — NEVER SKIP)
 
-After all 9 steps complete, these **must** execute in order:
+Step 9 completion auto-triggers report generation via `_auto_generate_reports()`. Only **one** report is generated.
+
+If auto-generation failed, run manually:
 
 ```bash
-# 1. Generate charts + full integrated HTML report
-python -m src.cli_post_research {workspace_dir}
-
-# 2. Also run the built-in report generator (summary)
 python -m src.cli report {workspace_dir}
 ```
 
 **Output artifacts** (all must exist before declaring research complete):
-- `{ticker}_full_report_{YYYYMMDD}.html` — self-contained HTML with base64 charts + ALL 10 steps integrated
-- `{ticker}_report_{YYYYMMDD}.html` — built-in summary report
+- `{ticker}_report_{YYYYMMDD}.html` — built-in summary report with charts
 - `{ticker}_summary_{YYYYMMDD}.md` — markdown summary
 - `distribution_chart.png` — Monte Carlo target price distribution
 - `forward_pe_band.png` — Forward PE band chart
 - `sensitivity_heatmap.png` — EPS×PE sensitivity matrix
 
-**Verification**: before ending the research, verify all 6 files exist. If any is missing, the research is NOT complete.
+**Verification**: before ending the research, verify all 5 files exist. If any is missing, the research is NOT complete.
 
 ### Post-Research: Thesis & Catalyst Init
 

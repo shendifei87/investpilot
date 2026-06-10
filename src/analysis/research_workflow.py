@@ -7,9 +7,12 @@ without completed prerequisites.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from src.analysis._base import WorkspaceStateBase
 from src.contracts import (
@@ -229,7 +232,57 @@ class ResearchWorkflow(WorkspaceStateBase):
         rec["validation_summary"] = validation_summary
         self._record("complete", step_id, validation_summary)
         self._save()
-        return {"completed": True, "step": step_id, "status": "completed"}
+
+        # ── Auto-trigger report generation on Step 9 completion ──
+        result = {"completed": True, "step": step_id, "status": "completed"}
+        if step_id == "9":
+            result["post_research"] = self._auto_generate_reports()
+
+        return result
+
+    def _auto_generate_reports(self) -> dict:
+        """Generate post-research report after Step 9 completes.
+
+        Runs the built-in report generator (HTML + markdown summary).
+        Returns a dict with paths to generated files. Failures are logged
+        but do NOT block Step 9 completion.
+        """
+        reports = {}
+        ws_str = str(self.workspace)
+
+        # Built-in report (HTML + markdown) — the only report generator
+        try:
+            from src.report.generator import generate_report_html
+            ticker = self.workspace.name
+            path = generate_report_html(ws_str, ticker=ticker, company_name="")
+            reports["report"] = str(path)
+            self._record("auto_report", "9", f"Report: {path}")
+        except Exception as e:
+            logger.warning("Auto-report generation failed: %s", e)
+            reports["report_error"] = str(e)
+
+        # Verify required artifacts exist
+        ticker = self.workspace.name
+        today = datetime.now().strftime("%Y%m%d")
+        required = [
+            f"{ticker}_report_{today}.html",
+            f"{ticker}_summary_{today}.md",
+        ]
+        missing = [f for f in required if not (self.workspace / f).exists()]
+        reports["required_artifacts"] = {
+            "expected": required,
+            "missing": missing,
+            "all_present": len(missing) == 0,
+        }
+
+        if missing:
+            logger.warning(
+                "Post-research artifacts missing: %s. "
+                "Run manually: python -m src.cli report %s",
+                missing, ws_str,
+            )
+
+        return reports
 
     def block_step(self, step: int | str, reason: str) -> dict:
         try:

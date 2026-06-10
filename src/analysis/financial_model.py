@@ -17,6 +17,11 @@ from src.analysis._utils import coerce_float as _num, is_pct_variable as _is_pct
 from src.analysis.step4_schema import load_structured_assumptions
 from src.storage import AtomicJSON
 
+# Lazy import to avoid circular deps — config.settings is lightweight
+def _validation_settings() -> dict:
+    from config.settings import MODEL_VALIDATION
+    return MODEL_VALIDATION
+
 
 MODEL_JSON = "forecast_model.json"
 MODEL_HTML = "forecast_model.html"
@@ -68,22 +73,29 @@ REQUIRED_REVIEWED_VARIABLES = {
 # The _reviewed_assumptions.json can use the canonical names or the aliases;
 # the model builder resolves both.
 REVIEWED_VARIABLE_ALIASES = {
-    "rev_growth": ["rev_growth", "total_revenue_growth", "revenue_growth_total"],
-    "gross_margin": ["gross_margin"],
-    "opex_ratio": ["opex_ratio"],
-    "tax_rate": ["tax_rate"],
-    "pe": ["pe", "pe_forward"],
+    "rev_growth": ["rev_growth", "total_revenue_growth", "revenue_growth_total",
+                    "revenue growth", "total revenue growth"],
+    "gross_margin": ["gross_margin", "gross margin", "gm"],
+    "opex_ratio": ["opex_ratio", "opex ratio", "s&d ratio", "sga ratio"],
+    "tax_rate": ["tax_rate", "effective tax rate", "tax rate"],
+    "pe": ["pe", "pe_forward", "forward pe", "pe_forward_t1", "forward_pe"],
 }
 
 
 def _canonical_reviewed_variables(assumptions: dict) -> set[str]:
-    """Return reviewed variables normalized to the model's canonical names."""
-    reviewed_vars = set(str(k) for k in assumptions)
+    """Return reviewed variables normalized to the model's canonical names.
+
+    Matching is case-insensitive and ignores surrounding whitespace so that
+    display names like ``"Gross Margin"`` or ``"Forward PE"`` resolve to their
+    canonical keys (``gross_margin``, ``pe``).
+    """
+    reviewed_keys_normalized = {str(k).strip().lower() for k in assumptions}
     canonical_vars = set()
     for canonical, aliases in REVIEWED_VARIABLE_ALIASES.items():
-        if any(alias in reviewed_vars for alias in aliases):
+        aliases_lower = {a.strip().lower() for a in aliases}
+        if reviewed_keys_normalized & aliases_lower:
             canonical_vars.add(canonical)
-    return reviewed_vars | canonical_vars
+    return canonical_vars | set(str(k) for k in assumptions)
 
 
 
@@ -136,6 +148,11 @@ def _periods(structured: dict) -> list[str]:
     return ["T+1", "T+2", "T+3"]
 
 
+def _normalize_var(name: str) -> str:
+    """Normalize a variable name for lookup: lowercase, spaces/hyphens → underscores."""
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
+
+
 def _matrix_lookup(structured: dict) -> dict[tuple[str, str], dict]:
     lookup = {}
     am = structured.get("assumption_matrix", []) or []
@@ -143,7 +160,7 @@ def _matrix_lookup(structured: dict) -> dict[tuple[str, str], dict]:
         for row in am:
             if not isinstance(row, dict):
                 continue
-            var = str(row.get("variable", "")).lower()
+            var = _normalize_var(str(row.get("variable", "")))
             year = str(row.get("year", "T+1"))
             if var:
                 lookup[(var, year)] = row
@@ -156,7 +173,7 @@ def _matrix_lookup(structured: dict) -> dict[tuple[str, str], dict]:
             for var_name, pct_dict in variables.items():
                 if not isinstance(pct_dict, dict):
                     continue
-                var = str(var_name).lower()
+                var = _normalize_var(str(var_name))
                 row = dict(pct_dict)
                 row["variable"] = var_name
                 row["year"] = period_key
@@ -170,11 +187,11 @@ def _assumption_row(lookup: dict, names: list[str], period: str) -> tuple[str, d
     periods = [period, *_period_aliases(period)]
     for name in names:
         for candidate_period in periods:
-            key = (name.lower(), candidate_period)
+            key = (_normalize_var(name), candidate_period)
             if key in lookup:
                 return name, lookup[key]
     for name in names:
-        key = (name.lower(), "")
+        key = (_normalize_var(name), "")
         if key in lookup:
             return name, lookup[key]
     return None
@@ -225,6 +242,41 @@ def _require_assumption_value(
     if _is_pct_variable(source_name) and abs(raw) > 1.0:
         raw = raw / 100.0
     return raw, _assumption_lineage(source_name, row, period, raw)
+
+
+def _require_assumption_value_with_fallback(
+    lookup: dict,
+    names: list[str],
+    period: str,
+    fallback_periods: list[str] | None = None,
+) -> tuple[float, dict]:
+    """Like _require_assumption_value but tries fallback periods if the exact
+    period is missing.  Used for PE which may not have T+3 in the matrix."""
+    found = _assumption_row(lookup, names, period)
+    if found:
+        source_name, row = found
+        raw = _num(row.get("p50"), 0.0)
+        if _is_pct_variable(source_name) and abs(raw) > 1.0:
+            raw = raw / 100.0
+        return raw, _assumption_lineage(source_name, row, period, raw)
+
+    # Try fallback periods (most recent first)
+    for fb_period in (fallback_periods or []):
+        found = _assumption_row(lookup, names, fb_period)
+        if found:
+            source_name, row = found
+            raw = _num(row.get("p50"), 0.0)
+            if _is_pct_variable(source_name) and abs(raw) > 1.0:
+                raw = raw / 100.0
+            lineage = _assumption_lineage(source_name, row, period, raw)
+            lineage["note"] = f"PE for {period} not in matrix; used {fb_period} value as proxy"
+            return raw, lineage
+
+    raise ValueError(
+        f"Missing Step 4 assumption for {names[0]} in {period} "
+        f"(also tried fallbacks: {fallback_periods}). "
+        "Do not use default model assumptions."
+    )
 
 
 def _base_inputs(structured: dict, workspace: Path) -> tuple[dict, dict]:
@@ -343,7 +395,14 @@ def _driver_growth_for_period(segment: str, drivers: list[dict], period: str, id
     }
 
 
-def _load_reviewed_assumptions(workspace: Path) -> dict:
+def _load_reviewed_assumptions(workspace: Path) -> tuple[dict, float | None, str | None]:
+    """Load reviewed assumptions and extract FX rate (if present).
+
+    Returns (reviewed_dict, fx_rate, fx_source) where fx_rate is None for
+    single-currency markets (e.g. A-shares priced in RMB) or a float for
+    cross-currency markets (e.g. HK-listed stocks with RMB-denominated EPS
+    but HKD price targets).  fx_source indicates which file provided the rate.
+    """
     reviewed_path = workspace / "_reviewed_assumptions.json"
     if not reviewed_path.exists():
         raise FileNotFoundError(
@@ -361,7 +420,28 @@ def _load_reviewed_assumptions(workspace: Path) -> dict:
     if missing:
         raise ValueError(f"_reviewed_assumptions.json missing required reviewed variables: {missing}. "
                          f"Accepted names: canonical={list(REQUIRED_REVIEWED_VARIABLES)} or aliases={REVIEWED_VARIABLE_ALIASES}")
-    return reviewed
+    # Extract FX rate — prefer step4 structured (canonical source), fallback to reviewed
+    fx_rate = None
+    fx_source = None
+    step4_path = workspace / "step4_structured_assumptions.json"
+    if step4_path.exists():
+        try:
+            s4 = json.loads(step4_path.read_text(encoding="utf-8"))
+            raw_fx = (s4.get("financial_model_inputs") or {}).get("fx_rate")
+            if raw_fx is not None:
+                fx_rate = _num(raw_fx, None)
+                if fx_rate is not None:
+                    fx_source = "step4_structured_assumptions.json"
+        except Exception:
+            pass
+    # Fallback to reviewed assumptions
+    if fx_rate is None:
+        raw_fx = reviewed.get("fx_rmb_to_hkd") or reviewed.get("fx_rmb_to_usd") or reviewed.get("fx_rate")
+        if raw_fx is not None:
+            fx_rate = _num(raw_fx, None)
+            if fx_rate is not None:
+                fx_source = "_reviewed_assumptions.json"
+    return reviewed, fx_rate, fx_source
 
 
 # ── Model builder ────────────────────────────────────────────────────────
@@ -373,7 +453,7 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
     if not structured:
         raise FileNotFoundError(f"{ws / 'step4_structured_assumptions.json'} not found")
 
-    reviewed = _load_reviewed_assumptions(ws)
+    reviewed, fx_rate, fx_source = _load_reviewed_assumptions(ws)
     periods = _periods(structured)
     lookup = _matrix_lookup(structured)
     inputs, input_lineage = _base_inputs(structured, ws)
@@ -508,10 +588,11 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         gm, gm_lineage = _require_assumption_value(lookup, ["gross_margin", "gm"], period)
         opex_ratio, opex_lineage = _require_assumption_value(lookup, ["opex_ratio", "operating_expense_ratio"], period)
         tax_rate, tax_lineage = _require_assumption_value(lookup, ["tax_rate", "effective_tax_rate"], period)
-        pe, pe_lineage = _require_assumption_value(
+        pe, pe_lineage = _require_assumption_value_with_fallback(
             lookup,
             ["pe", "forward_pe", "pe_multiple", "pe_fwd_t1", "pe_fwd_t2", "pe_fwd_t3"],
             period,
+            fallback_periods=["FY2027E", "FY2026E"],
         )
         for var_name, lineage in [
             ("gross_margin", gm_lineage),
@@ -552,9 +633,13 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         net_income = ebt - tax
 
         # EPS with dilution over time
-        eps_basic = net_income / shares_outstanding if shares_outstanding else 0.0
+        # shares_outstanding/diluted_shares are in absolute count (e.g. 1,332,000,000)
+        # but net_income is in millions (e.g. 14,098M).  Convert shares → millions.
+        shares_m = shares_outstanding / 1_000_000
+        eps_basic = net_income / shares_m if shares_m else 0.0
         diluted_shares = inputs["diluted_shares"] * ((1 + dilution_pct) ** list(periods).index(period))
-        eps_diluted = net_income / diluted_shares if diluted_shares else 0.0
+        diluted_shares_m = diluted_shares / 1_000_000
+        eps_diluted = net_income / diluted_shares_m if diluted_shares_m else 0.0
 
         # ── Cash Flow ──
         da = revenue * da_ratio
@@ -608,7 +693,11 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         bs_check = total_assets - total_liab_equity
 
         # ── Valuation ──
-        target_price = eps_diluted * pe
+        # target_price is always in the market's trading currency:
+        #   A-share: RMB (fx_rate=None, no conversion needed)
+        #   HK/US:   trading currency via fx_rate (e.g. RMB EPS × FX → HKD)
+        target_price_rmb = eps_diluted * pe
+        target_price = target_price_rmb * fx_rate if fx_rate else target_price_rmb
 
         income_values[period] = {
             "revenue": revenue,
@@ -669,6 +758,7 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
             "eps_basic": eps_basic,
             "forward_pe": pe,
             "target_price": target_price,
+            "target_price_rmb": target_price_rmb,
             "ebitda": ebit + da,
             "diluted_shares": diluted_shares,
         }
@@ -790,7 +880,7 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         {"statement": "Valuation", "label": "EPS (Basic)", "values": {p: valuation_values[p]["eps_basic"] for p in periods}, "formula": "Linked from income statement", "format": "per_share", "lineage": _row_lineage("EPS", periods)},
         {"statement": "Valuation", "label": "EPS (Diluted)", "values": {p: valuation_values[p]["eps"] for p in periods}, "formula": "Net Income / diluted shares", "format": "per_share", "lineage": _row_lineage("EPS", periods)},
         {"statement": "Valuation", "label": "Forward PE", "values": {p: valuation_values[p]["forward_pe"] for p in periods}, "formula": "Step 4 assumption matrix", "format": "multiple", "lineage": [f"assumption:pe:{p}" for p in periods]},
-        {"statement": "Valuation", "label": "Target Price", "values": {p: valuation_values[p]["target_price"] for p in periods}, "formula": "EPS (Diluted) × Forward PE", "format": "per_share", "lineage": _row_lineage("Target Price", periods)},
+        {"statement": "Valuation", "label": "Target Price", "values": {p: valuation_values[p]["target_price"] for p in periods}, "formula": f"EPS (Diluted) × Forward PE{(' × FX ' + str(fx_rate)) if fx_rate else ''}", "format": "per_share", "lineage": _row_lineage("Target Price", periods)},
         {"statement": "Valuation", "label": "EBITDA", "values": {p: valuation_values[p]["ebitda"] for p in periods}, "formula": "EBIT + D&A", "format": "number", "lineage": ["input:da_ratio"]},
         {"statement": "Valuation", "label": "Diluted Shares", "values": {p: valuation_values[p]["diluted_shares"] for p in periods}, "formula": "Diluted shares × (1 + dilution_pct)^n", "format": "number", "lineage": ["input:diluted_shares", "input:annual_share_dilution_pct"]},
     ]
@@ -875,6 +965,9 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
             "interest_modeled": True,
             "bs_driver_mode": "formula-linked" if bs_inputs_present else "hard-coded",
             "percentage_detection": "naming_convention",
+            "target_price_currency": "trading_currency" if fx_rate else "RMB",
+            "fx_rate": fx_rate,
+            "fx_source": fx_source,
         },
         "inputs": inputs,
         "defaults_used": [],
@@ -896,6 +989,232 @@ def build_financial_model(workspace_dir: str | Path, ticker: str = "") -> dict:
         },
         "checks": checks,
     }
+
+
+# ── Post-Model Validation ────────────────────────────────────────────────
+
+def validate_financial_model(model: dict, workspace: Path | None = None) -> list[dict]:
+    """Validate a forecast model by checking its values against source facts.
+
+    Philosophy: model values are derived from facts (step4 JSON, reviewed JSON).
+    Validation should check model values MATCH those facts — not self-consistency
+    (which is tautological for formula-linked models where gap is always 0).
+
+    Three layers:
+      1. Input fact-check: model.inputs == step4 financial_model_inputs
+      2. Assumption fact-check: model outputs == _reviewed_assumptions P50
+      3. BS gap WARN: only legitimate non-zero gap in simplified BS model
+
+    Returns a list of check result dicts:
+      check, period, expected, actual, source, status, notes
+    Status: OK, WARN, or FAIL.
+    """
+    EPS = 1e-4  # float epsilon for fact comparison (not arbitrary tolerance)
+    results: list[dict] = []
+
+    stmts = model["statements"]
+    inputs = model["inputs"]
+    conventions = model["model_conventions"]
+    periods = conventions["periods"]
+
+    def _get(statement: str, label: str, period: str) -> float | None:
+        for row in stmts.get(statement, []):
+            if row["label"] == label:
+                return row["values"].get(period)
+        return None
+
+    def _fact_check(check: str, period: str, fact: float, actual: float,
+                    source: str, notes: str = "") -> dict:
+        gap = abs(actual - fact)
+        ok = gap <= EPS
+        return {
+            "check": check, "period": period,
+            "expected": fact, "actual": actual,
+            "source": source,
+            "status": "OK" if ok else "FAIL",
+            "notes": notes or (f"gap={gap:.6f}" if not ok else ""),
+        }
+
+    # ── Layer 1: Input fact-checking against step4_structured_assumptions.json ──
+    step4_facts: dict = {}
+    reviewed_facts: dict = {}
+
+    if workspace is not None:
+        ws = workspace if isinstance(workspace, Path) else Path(workspace)
+        s4_path = ws / "step4_structured_assumptions.json"
+        if s4_path.exists():
+            step4_facts = json.loads(s4_path.read_text(encoding="utf-8"))
+
+        rv_path = ws / "_reviewed_assumptions.json"
+        if rv_path.exists():
+            reviewed_facts = json.loads(rv_path.read_text(encoding="utf-8"))
+
+    # 1a. Check model inputs against step4 financial_model_inputs
+    s4_inputs = step4_facts.get("financial_model_inputs", {})
+    if s4_inputs:
+        input_mapping = {
+            "shares_outstanding": "shares_outstanding",
+            "diluted_shares": "diluted_shares",
+            "annual_share_dilution_pct": "annual_share_dilution_pct",
+            "cash": "cash_rmb_m",
+            "debt": "debt_rmb_m",
+            "equity": "equity_rmb_m",
+        }
+        for model_key, fact_key in input_mapping.items():
+            fact_val = s4_inputs.get(fact_key) or s4_inputs.get(model_key)
+            model_val = inputs.get(model_key)
+            if fact_val is not None and model_val is not None:
+                # Normalize: shares are absolute count, financials are millions
+                fact_f = _num(fact_val, None)
+                model_f = _num(model_val, None)
+                if fact_f is not None and model_f is not None:
+                    results.append(_fact_check(
+                        f"input.{model_key} == step4",
+                        "inputs", fact_f, model_f,
+                        source="step4_structured_assumptions.json",
+                    ))
+
+        # Ratio inputs (no _rmb_m variant)
+        ratio_inputs = [
+            "capex_ratio", "da_ratio", "nwc_ratio", "dividend_payout",
+            "interest_rate_on_cash", "interest_rate_on_debt",
+            "ap_ratio", "ppe_ratio", "other_assets_ratio",
+        ]
+        for key in ratio_inputs:
+            fact_val = s4_inputs.get(key)
+            model_val = inputs.get(key)
+            if fact_val is not None and model_val is not None:
+                fact_f = _num(fact_val, None)
+                model_f = _num(model_val, None)
+                if fact_f is not None and model_f is not None:
+                    results.append(_fact_check(
+                        f"input.{key} == step4",
+                        "inputs", fact_f, model_f,
+                        source="step4_structured_assumptions.json",
+                    ))
+
+    # 1b. FX rate fact-check
+    fx_in_model = conventions.get("fx_rate")
+    # Try step4 first (canonical), then reviewed
+    fx_fact = step4_facts.get("fx_rmb_to_hkd") or step4_facts.get("fx_rate")
+    fx_source = "step4_structured_assumptions.json"
+    if fx_fact is None:
+        fx_fact = reviewed_facts.get("fx_rmb_to_hkd") or reviewed_facts.get("fx_rate")
+        fx_source = "_reviewed_assumptions.json"
+    if fx_fact is not None and fx_in_model is not None:
+        results.append(_fact_check(
+            "fx_rate == source fact",
+            "conventions", _num(fx_fact, 0), fx_in_model,
+            source=fx_source,
+        ))
+
+    # ── Layer 2: Assumption fact-checking against _reviewed_assumptions.json ──
+    reviewed_assumptions = reviewed_facts.get("assumptions", {})
+    reviewed_bridge = reviewed_facts.get("eps_bridge_p50", {})
+
+    if reviewed_assumptions:
+        # Build per-period P50 lookup (respect each assumption's 'year' field)
+        # Only check periods that the reviewed assumption explicitly targets
+        p50_by_period: dict[str, dict[str, float]] = {}  # period → {var_name: p50}
+        for var_name, var_data in reviewed_assumptions.items():
+            if isinstance(var_data, dict) and "p50" in var_data:
+                target_period = var_data.get("year")  # e.g. "FY2026E"
+                if target_period:
+                    p50_by_period.setdefault(target_period, {})[var_name] = _num(var_data["p50"], None)
+
+        for p in periods:
+            p50_lookup = p50_by_period.get(p, {})
+            if not p50_lookup:
+                continue  # No reviewed assumptions for this period — skip
+
+            # Gross Margin P50
+            gm_fact = p50_lookup.get("Gross Margin")
+            gm_model = _get("income_statement", "Gross Margin", p)
+            if gm_fact is not None and gm_model is not None:
+                results.append(_fact_check(
+                    "Gross Margin == reviewed P50",
+                    p, gm_fact, gm_model,
+                    source="_reviewed_assumptions.json",
+                ))
+
+            # OpEx Ratio P50 → check OpEx/Revenue
+            opex_fact = p50_lookup.get("OpEx Ratio")
+            rev_model = _get("income_statement", "Revenue", p) or 0
+            opex_model = _get("income_statement", "Operating Expense", p) or 0
+            if opex_fact is not None and rev_model:
+                opex_ratio_model = opex_model / rev_model
+                results.append(_fact_check(
+                    "OpEx/Revenue == reviewed P50",
+                    p, opex_fact, opex_ratio_model,
+                    source="_reviewed_assumptions.json",
+                ))
+
+    if reviewed_bridge:
+        # Bridge comparison: INFO only — bridge is our own rough forecast,
+        # not a fact.  Model produces a more refined version via detailed
+        # per-year margins & formula-linked calculations.  Differences are
+        # expected, not validation failures.
+        for p in periods:
+            bridge = reviewed_bridge.get(p, {})
+            if not bridge:
+                continue
+
+            def _bridge_info(check: str, period: str, bridge_val: float,
+                             model_val: float, notes_extra: str = "") -> dict:
+                gap = abs(model_val - bridge_val)
+                gap_pct = gap / abs(bridge_val) * 100 if bridge_val else 0
+                return {
+                    "check": check, "period": period,
+                    "expected": bridge_val, "actual": model_val,
+                    "source": "_reviewed_assumptions.json eps_bridge_p50 (rough estimate)",
+                    "status": "INFO",
+                    "notes": (f"gap={gap:.4f} ({gap_pct:.1f}%) — "
+                              f"bridge is rough estimate, model is detailed calc"
+                              + (f"; {notes_extra}" if notes_extra else "")),
+                }
+
+            # EPS (Diluted) — reviewed bridge has eps_rmb
+            eps_bridge = _num(bridge.get("eps_rmb"), None)
+            eps_model = _get("income_statement", "EPS (Diluted)", p)
+            if eps_bridge is not None and eps_model is not None:
+                results.append(_bridge_info(
+                    "EPS bridge vs model (INFO)", p, eps_bridge, eps_model,
+                ))
+
+            # Forward PE
+            pe_bridge = _num(bridge.get("pe"), None)
+            pe_model = _get("valuation", "Forward PE", p)
+            if pe_bridge is not None and pe_model is not None:
+                results.append(_bridge_info(
+                    "PE bridge vs model (INFO)", p, pe_bridge, pe_model,
+                ))
+
+            # Target Price — bridge has target_hkd
+            tp_bridge = _num(bridge.get("target_hkd"), None)
+            tp_model = _get("valuation", "Target Price", p)
+            if tp_bridge is not None and tp_model is not None:
+                results.append(_bridge_info(
+                    "TP bridge vs model (INFO)", p, tp_bridge, tp_model,
+                ))
+
+    # ── Layer 3: BS gap WARN (only legitimate non-zero gap) ──
+    bs_gap_pct = _validation_settings().get("bs_gap_pct", 0.02)
+    for p in periods:
+        ta = _get("balance_sheet", "Total Assets", p) or 0
+        tle = _get("balance_sheet", "Total Liabilities & Equity", p) or 0
+        if ta or tle:
+            bs_gap = abs(ta - tle)
+            bs_tol = max(abs(ta), 1.0) * bs_gap_pct
+            bs_ok = bs_gap <= bs_tol
+            results.append({
+                "check": "Balance Sheet: Assets ≈ L&E",
+                "period": p, "expected": tle, "actual": ta,
+                "source": "structural (simplified BS model)",
+                "status": "OK" if bs_ok else "WARN",
+                "notes": f"gap={bs_gap:.0f}M ({bs_gap/ta*100:.1f}% of assets)" if ta else "",
+            })
+
+    return results
 
 
 # ── HTML Renderer ────────────────────────────────────────────────────────
@@ -980,6 +1299,42 @@ def generate_financial_model_artifacts(workspace_dir: str | Path, ticker: str = 
     """Generate forecast_model.json and forecast_model.html in the workspace."""
     ws = resolve_workspace_path(workspace_dir)
     model = build_financial_model(ws, ticker=ticker)
+
+    # ── Post-model automated validation ──
+    validation_results = validate_financial_model(model, workspace=ws)
+    model["validation"] = validation_results
+    fails = [v for v in validation_results if v["status"] == "FAIL"]
+    warns = [v for v in validation_results if v["status"] == "WARN"]
+    if fails:
+        import logging
+        logging.getLogger(__name__).error(
+            "Financial model validation FAILURES (%d): %s",
+            len(fails),
+            "; ".join(f"{v['check']} [{v['period']}]: {v['notes']}" for v in fails),
+        )
+    if warns:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Financial model validation warnings (%d): %s",
+            len(warns),
+            "; ".join(f"{v['check']} [{v['period']}]: {v['notes']}" for v in warns),
+        )
+
+    # ── Validation metadata ──
+    from datetime import datetime, timezone
+    infos = [v for v in validation_results if v["status"] == "INFO"]
+    model["_meta"] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "validation_summary": {
+            "total": len(validation_results),
+            "ok": sum(1 for v in validation_results if v["status"] == "OK"),
+            "info": len(infos),
+            "warn": len(warns),
+            "fail": len(fails),
+            "passed": len(fails) == 0,
+        },
+    }
+
     html_body = render_financial_model_html(model)
     html = (
         "<!doctype html><html><head><meta charset=\"utf-8\">"

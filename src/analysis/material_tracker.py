@@ -308,7 +308,17 @@ class MaterialTracker(WorkspaceStateBase):
             "_knowledge_graph.json",
             "_reviewed_assumptions.json",
             "calibration_record.json",
+            "research_workflow.json",
         }
+        # Pipeline-generated data files — never source materials
+        _skip_prefixes = (
+            "financials_",
+            "price_history",
+            "company_info_",
+            "valuation_",
+            "forecast_",
+            "consensus_",
+        )
         docs = []
         skipped = []
         for path in sorted(self.workspace.iterdir()):
@@ -323,6 +333,18 @@ class MaterialTracker(WorkspaceStateBase):
             if path.name.endswith(".bak") or "_report_" in path.name:
                 skipped.append(path.name)
                 continue
+            if any(path.name.startswith(p) for p in _skip_prefixes):
+                skipped.append(path.name)
+                continue
+            if path.suffix.lower() in (".csv", ".json") and not any(
+                token in path.stem.lower()
+                for token in ["annual", "年报", "interim", "中报", "broker", "研报"]
+            ):
+                # Generic data CSV/JSON that isn't a named report → likely pipeline output
+                stem_lower = path.stem.lower()
+                if stem_lower.startswith("step") and stem_lower[4:5].isdigit():
+                    skipped.append(path.name)
+                    continue
 
             doc_type = "broker_report" if path.suffix.lower() == ".pdf" else "other"
             lower_name = path.name.lower()
