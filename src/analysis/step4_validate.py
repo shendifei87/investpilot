@@ -32,7 +32,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.analysis._utils import coerce_float as _to_float, is_pct_variable as _is_pct_variable_name
+from src.analysis._utils import coerce_float as _to_float
+from src.analysis._utils import is_pct_variable as _is_pct_variable_name
 from src.analysis.evidence_registry import (
     known_evidence_ids,
     validate_step4_evidence_contract,
@@ -122,10 +123,7 @@ def _evidence_ref_ok(ref: str, known_ids: set[str]) -> bool:
     if re.match(r'^(E\d+|EG[0-9a-f]+|CS[0-9a-f]+|DOC[0-9a-f]+)$', ref):
         return True
     # Common workspace artifacts used as evidence
-    if ref in ("calculated_valuation.json", "price_history.csv", "valuation_raw_inputs.json",
-               "Step 1 Analysis", "Step 2 Comps", "Step 3 Marginal Changes"):
-        return True
-    return False
+    return ref in ("calculated_valuation.json", "price_history.csv", "valuation_raw_inputs.json", "Step 1 Analysis", "Step 2 Comps", "Step 3 Marginal Changes")
 
 
 def _canonical_variable_name(variable: str) -> str:
@@ -189,10 +187,7 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
             present = present and len(structured.get("growth_drivers", [])) > 0
         if key == "assumption_matrix":
             am = structured.get("assumption_matrix", [])
-            if isinstance(am, dict):
-                present = present and len(am) > 0
-            else:
-                present = present and len(am) > 0
+            present = present and len(am) > 0 if isinstance(am, dict) else present and len(am) > 0
         checks.append({
             "check": f"required_section:{key}",
             "status": "PASS" if present else "MISSING",
@@ -236,11 +231,16 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
                     # We can't do the full calculation without base revenue & shares,
                     # so just verify EPS is present and the chain is complete.
                     missing_fields = []
-                    if rev_g is None: missing_fields.append("revenue_growth")
-                    if gm is None: missing_fields.append("gross_margin")
-                    if opex is None: missing_fields.append("opex_ratio")
-                    if tax is None: missing_fields.append("tax_rate")
-                    if eps is None: missing_fields.append("eps")
+                    if rev_g is None:
+                        missing_fields.append("revenue_growth")
+                    if gm is None:
+                        missing_fields.append("gross_margin")
+                    if opex is None:
+                        missing_fields.append("opex_ratio")
+                    if tax is None:
+                        missing_fields.append("tax_rate")
+                    if eps is None:
+                        missing_fields.append("eps")
                     if missing_fields:
                         issues.append(f"{pk}: missing {missing_fields}")
                 if issues:
@@ -818,8 +818,7 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
         if _is_pct_variable_name(str(label)):
             for pct_key in ("p10", "p30", "p50", "p70", "p90"):
                 val = row.get(pct_key)
-                if val is not None and isinstance(val, (int, float)):
-                    if abs(float(val)) > 1.0:
+                if val is not None and isinstance(val, (int, float)) and abs(float(val)) > 1.0:
                         decimal_format_issues.append(
                             f"{label}.{pct_key}={val} appears to be a whole-number % "
                             f"(e.g. 20 meaning 20%). Store as decimal: {float(val)/100:.3f}"

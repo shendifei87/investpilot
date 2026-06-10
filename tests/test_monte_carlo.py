@@ -4,29 +4,23 @@ Validates distribution fitting, Monte Carlo simulation, RRR/Kelly calculation,
 assumption consistency guard, and reproducibility.
 """
 
-import json
 import tempfile
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from src.analysis.monte_carlo import (
-    NormalDist,
     LogNormalDist,
+    NormalDist,
     _ndtri,
     _norm_cdf,
     _t_cdf,
-    fit_distribution_from_percentiles,
     build_correlation_matrix,
-    run_monte_carlo,
     calc_rrr,
-    save_reviewed_assumptions,
+    fit_distribution_from_percentiles,
+    run_monte_carlo,
     verify_assumption_consistency,
-    save_calibration,
-    update_calibration_actual,
 )
-
 
 # ── Distribution classes ──────────────────────────────────────────
 
@@ -318,7 +312,8 @@ class TestRunMonteCarlo:
             "a": NormalDist(mu=0, sigma=1),
             "b": NormalDist(mu=0, sigma=1),
         }
-        pnl = lambda i: {"a": i["a"]}
+        def pnl(i):
+            return {"a": i["a"]}
 
         result_gauss = run_monte_carlo(dists, pnl, correlation_matrix=corr, seed=42, n_simulations=50000)
         result_t = run_monte_carlo(dists, pnl, correlation_matrix=corr, seed=42, n_simulations=50000, copula_df=4)
@@ -451,7 +446,7 @@ class TestAssumptionConsistency:
 
 class TestCalibration:
     def test_save_and_update(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory():
             # We test the logic but can't test the full path resolution without mocking
             # The core logic is: save record → update with actual → verify stats
             records = [

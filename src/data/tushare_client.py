@@ -8,7 +8,6 @@ Usage:
 
 import logging
 import time
-from typing import Optional
 
 import pandas as pd
 

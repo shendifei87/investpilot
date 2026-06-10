@@ -4,17 +4,16 @@ These tests mock the Tushare client to verify correct API method dispatch,
 error handling, and normalization without requiring network access.
 """
 
-from unittest.mock import MagicMock, patch
 import sys
 import types
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
 
 from src.data.ashare_fetcher import AshareFetcher, _ttm_from_cumulative_ytd
-from src.data.base import BaseTushareFetcher, FetchResult
+from src.data.base import FetchResult
 from src.data.us_fetcher import USFetcher
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import warnings
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 # Field name aliases: yfinance (English) → akshare (Chinese) → tushare/SEC/lowercase
 # Includes HK financial reporting terminology (港交所年报术语).
@@ -188,7 +189,7 @@ def pivot_long_format(
             f"pivot_long_format: {len(unmapped)} unmapped indicator name(s) found. "
             f"These names are not in the alias dictionaries and will not be matched "
             f"by _get_series. Consider adding them via extra_aliases parameter. "
-            f"Unmapped: {sorted(unmapped)[:10]}"
+            f"Unmapped: {sorted(unmapped)[:10]}", stacklevel=2
         )
 
     pivoted = df.pivot_table(
@@ -387,7 +388,7 @@ def calc_financial_ratios(income: pd.DataFrame, balance: pd.DataFrame) -> dict:
                 ratios["current_ratio"] = (current_assets / current_liab).to_dict()
 
     if w:
-        warnings.warn(f"Financial ratio calculation warnings: {'; '.join(w)}")
+        warnings.warn(f"Financial ratio calculation warnings: {'; '.join(w)}", stacklevel=2)
 
     return ratios
 

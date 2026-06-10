@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """InvestPilot CLI — data fetching and analysis tools."""
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import sys
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
+from config.settings import WORKSPACES_DIR
 from config.ticker_rules import detect_market, normalize_ticker
 from src.data.market_detector import get_fetcher
-from config.settings import WORKSPACES_DIR
+
+logger = logging.getLogger(__name__)
 
 
 def cmd_detect(args):
@@ -63,8 +65,9 @@ def cmd_fetch(args):
 
 
 def cmd_analyze(args):
-    from src.analysis.technical import calc_ma, calc_rsi, calc_macd
     import pandas as pd
+
+    from src.analysis.technical import calc_ma, calc_macd, calc_rsi
 
     input_dir = Path(args.input) if args.input else WORKSPACES_DIR / args.ticker.replace(".", "_")
     output_dir = Path(args.output) if args.output else input_dir / "analysis"
@@ -112,7 +115,7 @@ def cmd_thesis(args):
             core_thesis=args.thesis,
             hold_period_months=int(args.hold_months or 12),
         )
-        print(f"Thesis created (revision 1)")
+        print("Thesis created (revision 1)")
         print(json.dumps(thesis, ensure_ascii=False, indent=2, default=str))
 
     elif action == "add-hypothesis":
@@ -180,13 +183,13 @@ def cmd_catalyst(args):
             if not args.condition:
                 print("Error: --condition is required for kill-switch trigger")
                 return
-            ks = tracker.trigger_kill_switch(args.condition, args.evidence or "")
+            tracker.trigger_kill_switch(args.condition, args.evidence or "")
             print(f"Kill switch triggered: {args.condition}")
         else:
             if not args.condition:
                 print("Error: --condition is required for kill-switch add")
                 return
-            ks = tracker.add_kill_switch(args.condition, severity=args.severity or "critical")
+            tracker.add_kill_switch(args.condition, severity=args.severity or "critical")
             print(f"Kill switch added: {args.condition}")
 
     else:
@@ -200,7 +203,7 @@ def _parse_json_arg(raw, default):
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
-        raise SystemExit(f"Invalid JSON argument: {e}")
+        raise SystemExit(f"Invalid JSON argument: {e}") from e
 
 
 def cmd_consensus(args):
@@ -446,6 +449,7 @@ def cmd_report(args):
 def cmd_step4_template(args):
     """Print a minimal valid Step 4 structured assumptions JSON template."""
     import json
+
     from src.analysis.step4_schema import generate_step4_template
     template = generate_step4_template()
     print(json.dumps(template, ensure_ascii=False, indent=2))
@@ -787,7 +791,9 @@ def _auto_calculate_valuation(results, output_dir):
 def cmd_verify_news(args):
     """验证 WebSearch 结果的发布日期，防止过期新闻误引。"""
     from src.utils.web_date_verifier import (
-        verify_url, verify_evidence_list, print_verification_report,
+        print_verification_report,
+        verify_evidence_list,
+        verify_url,
     )
 
     if args.url:
@@ -798,7 +804,7 @@ def cmd_verify_news(args):
         else:
             print_verification_report([asdict(result)])
     elif args.input:
-        with open(args.input, "r", encoding="utf-8") as f:
+        with open(args.input, encoding="utf-8") as f:
             evidence = json.load(f)
         results = verify_evidence_list(evidence, max_age_days=args.max_age, timeout=args.timeout)
         if args.json:
@@ -855,7 +861,7 @@ def cmd_fetch_peers(args):
             summary[peer_ticker] = {"success": False, "error": str(e)}
             print(f"  Failed: {e}")
 
-    print(f"\nPeer data summary:")
+    print("\nPeer data summary:")
     print(json.dumps(summary, indent=2))
 
 
@@ -871,7 +877,7 @@ def cmd_comps(args):
 
     try:
         result = run_comps(ws_path)
-        print(f"✅ Comps generated successfully:")
+        print("✅ Comps generated successfully:")
         print(f"   XLSX:    {result['xlsx']}")
         print(f"   Summary: {result['summary_md']}")
         print(f"   Benchmark: {result['benchmark']}")
@@ -889,12 +895,13 @@ def cmd_comps(args):
 def cmd_mc(args):
     """Run Monte Carlo simulation from reviewed assumptions."""
     import numpy as np
-    from src.storage import AtomicJSON
+
     from src.analysis.monte_carlo import (
+        calc_rrr,
         fit_distribution_from_percentiles,
         run_monte_carlo_cumulative,
-        calc_rrr,
     )
+    from src.storage import AtomicJSON
 
     ws_path = _resolve_workspace(args.workspace)
     store = AtomicJSON(ws_path)
@@ -975,7 +982,7 @@ def cmd_mc(args):
             print(f"   {yr}: {sorted(vs)}")
 
     # ── Load model parameters from reviewed assumptions ──
-    eps_bridge = reviewed.get("eps_bridge_p50", {})
+    reviewed.get("eps_bridge_p50", {})
     shares_m = reviewed.get("shares_m")
     fx = reviewed.get("fx_rmb_to_hkd", 1.0)
     current_price = reviewed.get("current_price_hkd", 0.0)
@@ -1189,10 +1196,10 @@ def cmd_mc(args):
             np.linalg.cholesky(corr_matrix)
             print(f"   Correlation matrix: {n_vars}×{n_vars}, PD ✓")
         except np.linalg.LinAlgError:
-            print(f"⚠️  Correlation matrix not positive-definite — falling back to independent")
+            print("⚠️  Correlation matrix not positive-definite — falling back to independent")
             corr_matrix = None
     else:
-        print(f"   No correlations_defined in reviewed assumptions — running independent")
+        print("   No correlations_defined in reviewed assumptions — running independent")
 
     # ── Run simulation ──
     n_sims = int(args.sims) if args.sims else 100_000
@@ -1288,7 +1295,7 @@ def cmd_mc(args):
     results_path = ws_path / "monte_carlo_results.json"
 
     # ── Print summary ──
-    print(f"\n✅ Monte Carlo simulation complete (cumulative mode)")
+    print("\n✅ Monte Carlo simulation complete (cumulative mode)")
     print(f"   Output: {results_path}")
     print(f"   Simulations: {n_sims:,}")
     print()

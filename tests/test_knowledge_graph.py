@@ -4,18 +4,15 @@ Validates migration, normalization, deduplication, fuzzy matching,
 and API contract preservation.
 """
 
-import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from src.analysis.knowledge_graph import (
     KnowledgeGraph,
-    _normalize_moat,
     _migrate_v1_to_v2,
+    _normalize_moat,
 )
-
 
 # ── Unit tests ──────────────────────────────────────────────────
 

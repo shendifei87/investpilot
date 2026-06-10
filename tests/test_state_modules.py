@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from src.storage import AtomicJSON
 from src.analysis._base import resolve_workspace_path
+from src.storage import AtomicJSON
 
 
 class TestAtomicJSONLoad:
@@ -80,12 +80,11 @@ class TestAtomicJSONSave:
         """Multiple threads writing to the same file with file locking."""
         with tempfile.TemporaryDirectory() as tmp:
             errors = []
-            completed_count = []
 
             def writer(n):
                 try:
                     store = AtomicJSON(Path(tmp))
-                    for i in range(20):
+                    for _i in range(20):
                         data = store.load("counter.json", default={"count": 0})
                         data["count"] = data.get("count", 0) + 1
                         store.save("counter.json", data)

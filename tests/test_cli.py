@@ -5,14 +5,12 @@ Fetch subcommand requires live Tushare API so is not tested here.
 """
 
 import json
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 import pandas as pd
+import pytest
 
-from config.ticker_rules import detect_market, normalize_ticker, get_tushare_code
-
+from config.ticker_rules import detect_market, get_tushare_code, normalize_ticker
 
 # ---------------------------------------------------------------------------
 # detect_market / normalize_ticker / get_tushare_code
@@ -129,8 +127,8 @@ class TestCmdDetect:
 class TestCmdAnalyze:
     def test_analyze_loads_price_and_computes_indicators(self, tmp_path):
         """Verify cmd_analyze reads price CSV and runs technical analysis."""
-        import pandas as pd
         import numpy as np
+        import pandas as pd
 
         ws = tmp_path / "TEST_WS"
         ws.mkdir()

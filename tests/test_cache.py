@@ -1,6 +1,7 @@
 """Tests for the TTL-based data cache (src/data/cache.py)."""
 
 import json
+import sys
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +9,6 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
@@ -72,9 +72,8 @@ class TestFetchAndCache:
     def test_raises_on_none_return(self, tmp_path):
         import src.data.cache as cache_mod
 
-        with patch.object(cache_mod, "CACHE_DIR", tmp_path):
-            with pytest.raises(ValueError, match="returned None"):
-                cache_mod.fetch_and_cache("bad_key", lambda: None)
+        with patch.object(cache_mod, "CACHE_DIR", tmp_path), pytest.raises(ValueError, match="returned None"):
+            cache_mod.fetch_and_cache("bad_key", lambda: None)
 
     def test_handles_meta_missing(self, tmp_path):
         """If CSV exists but meta.json missing, should refetch."""

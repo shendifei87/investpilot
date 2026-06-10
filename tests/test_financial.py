@@ -5,28 +5,27 @@ import pandas as pd
 import pytest
 
 from src.analysis.financial import (
-    calc_financial_ratios,
-    calc_revenue_growth,
-    dupont_analysis,
-    calc_earnings_quality,
-    quarterly_arithmetic_check,
-    calc_pe,
-    calc_pe_trailing,
-    calc_pe_forward,
-    calc_pb,
-    calc_pb_from_statements,
-    calc_ps,
-    calc_ps_from_statements,
-    calc_ev_ebitda,
-    calc_all_valuation_ratios,
-    calc_peer_pe_table,
-    validate_valuation_apple_to_apple,
-    _get_series,
-    _INCOME_ALIASES,
     _BALANCE_ALIASES,
     _CASHFLOW_ALIASES,
+    _INCOME_ALIASES,
+    _get_series,
+    calc_all_valuation_ratios,
+    calc_earnings_quality,
+    calc_ev_ebitda,
+    calc_financial_ratios,
+    calc_pb,
+    calc_pb_from_statements,
+    calc_pe,
+    calc_pe_forward,
+    calc_pe_trailing,
+    calc_peer_pe_table,
+    calc_ps,
+    calc_ps_from_statements,
+    calc_revenue_growth,
+    dupont_analysis,
+    quarterly_arithmetic_check,
+    validate_valuation_apple_to_apple,
 )
-
 
 # ── yfinance-format mock data factories ──────────────────────────
 

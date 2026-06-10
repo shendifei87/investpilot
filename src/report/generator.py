@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import mistune
-import re
-import json
 import base64
+import contextlib
+import json
 import logging
-from html import escape
-import numpy as np
-from pathlib import Path
+import re
 from datetime import datetime
-from typing import Optional
+from html import escape
+from pathlib import Path
+
+import mistune
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +80,11 @@ def generate_distribution_from_percentiles(
     Returns:
         str: Path to saved PNG file.
     """
-    from scipy.stats import skewnorm
-
     # --- Calibrate skew-normal to match P10 / P50 / P90 ---
     # We use scipy.optimize to find (a, loc, scale) such that the
     # skew-normal percentiles match the supplied ones.
     from scipy.optimize import minimize
+    from scipy.stats import skewnorm
 
     target_pcts = np.array([10, 50, 90])
     target_vals = np.array([p10, p50, p90])
@@ -133,7 +133,7 @@ def generate_distribution_from_percentiles(
                 50: (p50, "#2a9d8f", "P50 (Base)"),
                 70: (p70, "#f4a261", "P70"),
                 90: (p90, "#e63946", "P90 (Bull)")}
-    for pct, (val, color, label) in pct_data.items():
+    for _pct, (val, color, label) in pct_data.items():
         ax.axvline(val, color=color, linestyle="--", linewidth=1.5, alpha=0.85,
                    label=f"{label}: {val:.1f} {currency}")
 
@@ -184,8 +184,8 @@ def generate_pe_band_chart(
 
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
 
     dates = pe_band_data["dates"]
     pe_series = pe_band_data["pe_series"]
@@ -259,7 +259,7 @@ def generate_pe_band_chart(
 # HTML report generation: markdown-to-HTML converter + helpers
 # ---------------------------------------------------------------------------
 
-def _safe_workspace_file(workspace_dir: Path, user_path: str) -> Optional[Path]:
+def _safe_workspace_file(workspace_dir: Path, user_path: str) -> Path | None:
     """Resolve a markdown asset path and require it to stay under workspace."""
     resolved = (workspace_dir / user_path).resolve()
     base = workspace_dir.resolve()
@@ -303,8 +303,7 @@ class _ResearchReportRenderer(mistune.HTMLRenderer):
         alt = text or ""
         if self._ws:
             img_path = _safe_workspace_file(self._ws, url)
-            if img_path is not None and img_path.exists():
-                if img_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+            if img_path is not None and img_path.exists() and img_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                     data = base64.b64encode(img_path.read_bytes()).decode("ascii")
                     mime = _image_mime(img_path)
                     return (
@@ -441,7 +440,7 @@ def _extract_target_price(ws: Path, mc: dict, sa: dict | None, read_model_text) 
         if tp is not None:
             return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
         # Fallback within step4: search bridge keys
-        for bk, bv in bridge.items():
+        for _bk, bv in bridge.items():
             if isinstance(bv, dict) and bv.get('target_price_hkd') is not None:
                 tp = bv['target_price_hkd']
                 return f"{tp:.2f}" if isinstance(tp, float) else str(tp)
@@ -893,12 +892,12 @@ def generate_summary_md(workspace_dir, ticker: str, company_name: str = "", lang
     # Load structured data
     mc_stats = {}
     if (ws / 'monte_carlo_stats.json').exists():
-        try: mc_stats = json.loads((ws / 'monte_carlo_stats.json').read_text(encoding='utf-8'))
-        except: pass
+        with contextlib.suppress(BaseException):
+            mc_stats = json.loads((ws / 'monte_carlo_stats.json').read_text(encoding='utf-8'))
     calc_val = {}
     if (ws / 'calculated_valuation.json').exists():
-        try: calc_val = json.loads((ws / 'calculated_valuation.json').read_text(encoding='utf-8'))
-        except: pass
+        with contextlib.suppress(BaseException):
+            calc_val = json.loads((ws / 'calculated_valuation.json').read_text(encoding='utf-8'))
 
     # Find canonical step files
     step_files = sorted(ws.glob("step*_*.md"))
@@ -926,7 +925,8 @@ def generate_summary_md(workspace_dir, ticker: str, company_name: str = "", lang
     # ── Build ──
     pe_val = ''
     pe_ttm = calc_val.get('pe_trailing', {})
-    if isinstance(pe_ttm, dict): pe_val = pe_ttm.get('value', '')
+    if isinstance(pe_ttm, dict):
+        pe_val = pe_ttm.get('value', '')
     eps_p50 = mc_stats.get('eps_p50', '')
     tp_hkd = mc_stats.get('target_p50_hkd', '')
     prob_pos = mc_stats.get('prob_positive', '')
@@ -937,12 +937,18 @@ def generate_summary_md(workspace_dir, ticker: str, company_name: str = "", lang
 
     # Metric bar
     parts = []
-    if pe_val: parts.append(f"{PE_LABEL}: {pe_val}x")
-    if eps_p50: parts.append(f"{EPS_LABEL}: {eps_p50} {RMB}")
-    if tp_hkd: parts.append(f"{TARGET_LABEL}: {tp_hkd} {HKD}")
-    if prob_pos: parts.append(f"{WIN_LABEL}: {prob_pos}%")
-    if med_ret: parts.append(f"{MED_LABEL}: +{med_ret}%")
-    if parts: lines.append("| " + " | ".join(parts) + " |\n")
+    if pe_val:
+        parts.append(f"{PE_LABEL}: {pe_val}x")
+    if eps_p50:
+        parts.append(f"{EPS_LABEL}: {eps_p50} {RMB}")
+    if tp_hkd:
+        parts.append(f"{TARGET_LABEL}: {tp_hkd} {HKD}")
+    if prob_pos:
+        parts.append(f"{WIN_LABEL}: {prob_pos}%")
+    if med_ret:
+        parts.append(f"{MED_LABEL}: +{med_ret}%")
+    if parts:
+        lines.append("| " + " | ".join(parts) + " |\n")
 
     lines.append("---\n")
 
@@ -957,16 +963,19 @@ def generate_summary_md(workspace_dir, ticker: str, company_name: str = "", lang
 
     # Steps 1-9
     for sn in range(1, 10):
-        if sn not in canonical: continue
+        if sn not in canonical:
+            continue
         text = canonical[sn].read_text(encoding='utf-8')
         f = _extract_conclusion(text)
         if not f:
             for ln in text.split('\n')[:50]:
                 m = re.match(r'\*\*(EPS|Target|PE|RRR|Revenue|概率|仓位|Rating|毛利率|ROE|Moat)\s*(?:P\d{2})?\*{0,2}\s*:\s*\*{0,2}(.+?)\*{0,2}$', ln.strip())
                 if m:
-                    f = f"{m.group(1).strip('*')}: {m.group(2).strip('*')}"; break
+                    f = f"{m.group(1).strip('*')}: {m.group(2).strip('*')}"
+                    break
         if f:
-            if len(f) > 120: f = f[:117] + '...'
+            if len(f) > 120:
+                f = f[:117] + '...'
             lines.append(f"- **{STEP_TITLES.get(sn, f'S{sn}')}**: {f}")
 
     lines += ["", "---", f"*{CHARTS_LABEL}: [{ticker}_report_{date_str}.html]({ticker}_report_{date_str}.html)*"]
@@ -985,7 +994,7 @@ def generate_report_html(
     ticker: str,
     company_name: str = "",
     summary_overrides: dict = None,
-) -> 'Path':
+) -> Path:
     """Generate a self-contained HTML research report.
 
     Args:
@@ -997,9 +1006,10 @@ def generate_report_html(
     Returns:
         Path to the generated HTML file.
     """
-    from pathlib import Path
     from datetime import datetime
-    from src.report._html_templates import REPORT_CSS, REPORT_JS, HTML_SKELETON, STEP_CONFIG
+    from pathlib import Path
+
+    from src.report._html_templates import HTML_SKELETON, REPORT_CSS, REPORT_JS, STEP_CONFIG
 
     ws = Path(workspace_dir)
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -1180,7 +1190,8 @@ def generate_report_html(
                     return d.get(f"p{pct}", d.get(str(pct), d.get(pct))) if isinstance(d, dict) else None
                 def _ratio_value(d, pct):
                     v = _pct_get(d, pct)
-                    if v is None: return None
+                    if v is None:
+                        return None
                     v = float(v)
                     return v / 100.0 if abs(v) > 1.0 else v
                 def _number_value(d, pct):
@@ -1234,7 +1245,7 @@ def generate_report_html(
                             currency=currency,
                         )
                         if mc_png.exists():
-                            print(f"  ✓ Monte Carlo distribution chart generated from monte_carlo_results.json")
+                            print("  ✓ Monte Carlo distribution chart generated from monte_carlo_results.json")
         except Exception as e:
             logger.warning("Monte Carlo chart generation skipped: %s", e)
 

@@ -1,10 +1,10 @@
 import logging
 import warnings
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ def forward_pe_band(
     if len(weekly) < 52:
         warnings.warn(
             f"Only {len(weekly)} weeks of price data available (minimum 52 recommended). "
-            "PE band may not be statistically meaningful."
+            "PE band may not be statistically meaningful.", stacklevel=2
         )
 
     method = "constant_forward_eps_proxy"
@@ -460,7 +460,7 @@ def calc_historical_pe_series(
             # Fallback to annual if less than 4 quarters available
             warnings.warn(
                 f"Only {len(eps_quarterly)} quarters of EPS data available. "
-                "Falling back to annual method."
+                "Falling back to annual method.", stacklevel=2
             )
             latest_eps = float(eps_quarterly.iloc[-1])
             if latest_eps <= 0:

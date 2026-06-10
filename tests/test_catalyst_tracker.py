@@ -6,13 +6,11 @@ computation, overdue detection, and catalyst calendar.
 
 import json
 from datetime import date, timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from src.analysis.catalyst_tracker import CatalystTracker
-
 
 # ---------------------------------------------------------------------------
 # Helpers

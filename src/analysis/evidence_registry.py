@@ -16,7 +16,6 @@ from src.analysis._base import resolve_workspace_path
 from src.analysis.material_tracker import MaterialTracker
 from src.storage import AtomicJSON
 
-
 EVIDENCE_REGISTRY_FILENAME = "evidence_registry.json"
 
 RAW_ARTIFACTS = {

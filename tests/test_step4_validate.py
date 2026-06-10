@@ -9,14 +9,11 @@ Validates:
 import json
 from pathlib import Path
 
-import pytest
-
 from src.analysis.step4_validate import (
+    _load_structured_json,
     validate_contrarian_checks,
     validate_step4,
     validate_step4_with_guard,
-    _load_structured_json,
-    _validate_structured,
 )
 
 

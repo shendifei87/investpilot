@@ -7,12 +7,11 @@ dependency graph used by workflow, report generation, and validators.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
 
 CONTRACT_PATH = Path(__file__).resolve().parents[2] / "config" / "step_contracts.json"
 
@@ -34,7 +33,7 @@ class StepContract:
     contract_focus: str
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "StepContract":
+    def from_dict(cls, data: dict[str, Any]) -> StepContract:
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),

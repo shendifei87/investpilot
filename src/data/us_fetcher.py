@@ -14,13 +14,12 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import requests
 
 from src.data.base import BaseFetcher, FetchResult
-
 
 _AK_RETRY_COUNT = 3
 _AK_RETRY_DELAY = 1.0
@@ -39,7 +38,7 @@ def _ak_retry(fn, *args, **kwargs):
     raise last_err
 
 
-def _safe_float(value) -> Optional[float]:
+def _safe_float(value) -> float | None:
     if value is None:
         return None
     try:
@@ -124,7 +123,7 @@ class USFetcher(BaseFetcher):
         concepts: list[tuple[str, str]],
         units: tuple[str, ...],
         annual_only: bool = False,
-    ) -> Optional[float]:
+    ) -> float | None:
         candidates: list[dict[str, Any]] = []
         for namespace, concept in concepts:
             candidates.extend(self._unit_records(facts, namespace, concept, units))

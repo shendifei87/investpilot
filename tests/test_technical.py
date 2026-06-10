@@ -1,14 +1,15 @@
 """Tests for technical analysis indicators (src/analysis/technical.py)."""
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-import sys
-from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.analysis.technical import calc_ma, calc_rsi, calc_macd
+from src.analysis.technical import calc_ma, calc_macd, calc_rsi
 
 
 def _make_close_series(n: int = 100, seed: int = 42) -> pd.Series:

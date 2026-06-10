@@ -9,7 +9,7 @@ override company_info and valuation_inputs.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Optional
 
 import pandas as pd
 
@@ -20,7 +20,7 @@ from config.ticker_rules import get_tushare_code
 class FetchResult:
     data: Optional[object] = None
     source: str = ""
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     success: bool = True
 
 
@@ -48,7 +48,7 @@ class BaseFetcher(ABC):
         """
         ...
 
-    def fetch_all(self, ticker: str, period: str = "5y") -> Dict[str, FetchResult]:
+    def fetch_all(self, ticker: str, period: str = "5y") -> dict[str, FetchResult]:
         results = {}
         for name, method in [
             ("company_info", self.fetch_company_info),
@@ -83,7 +83,7 @@ class BaseTushareFetcher(BaseFetcher):
         - fetch_financial_statements() — if extra statements are needed
     """
 
-    api_methods: Dict[str, str] = {}
+    api_methods: dict[str, str] = {}
     price_warning: str = "No price data returned"
 
     # ── Utility methods ─────────────────────────────────────
@@ -143,9 +143,9 @@ class BaseTushareFetcher(BaseFetcher):
         """
         from src.data.tushare_client import tushare_client
         from src.data.tushare_normalizer import (
-            normalize_income_df,
             normalize_balance_df,
             normalize_cashflow_df,
+            normalize_income_df,
         )
 
         ts_code = self._ts_code(ticker)

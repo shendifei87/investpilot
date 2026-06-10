@@ -1,9 +1,7 @@
 import json
 from unittest.mock import patch
 
-import pytest
-
-from src.analysis.research_workflow import ResearchWorkflow, STEP_FILES
+from src.analysis.research_workflow import STEP_FILES, ResearchWorkflow
 from src.contracts import get_step_contract
 
 

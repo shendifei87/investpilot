@@ -13,7 +13,6 @@ from typing import Any
 from src.analysis._base import resolve_workspace_path
 from src.storage import AtomicJSON
 
-
 STEP4_STRUCTURED_FILENAME = "step4_structured_assumptions.json"
 
 

@@ -11,9 +11,9 @@ arrives in uneven shapes across A-share, HK, and US research workflows.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
-import uuid
 
 from src.analysis._base import WorkspaceStateBase
 from src.analysis._utils import coerce_float as _coerce_number

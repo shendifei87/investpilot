@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import os
@@ -86,14 +87,10 @@ class AtomicJSON:
             os.replace(tmp_path, str(filepath))
         except BaseException:
             if fd != -1:
-                try:
+                with contextlib.suppress(OSError):
                     os.close(fd)
-                except OSError:
-                    pass
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
             raise
 
     def save(self, filename: str, data: dict | list) -> Path:
@@ -116,10 +113,8 @@ class AtomicJSON:
 
             # Backup existing file before overwrite
             if filepath.exists():
-                try:
+                with contextlib.suppress(OSError):
                     shutil.copy2(filepath, backup)
-                except OSError:
-                    pass  # Best-effort backup
 
             content = json.dumps(data, ensure_ascii=False, indent=2)
             self._atomic_write(filename, content)

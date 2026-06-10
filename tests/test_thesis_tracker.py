@@ -5,14 +5,12 @@ update brief, pre-confirmation guard, and revision history.
 """
 
 import json
-from datetime import datetime, date
-from pathlib import Path
+from datetime import date
 from unittest.mock import patch
 
 import pytest
 
-from src.analysis.thesis_tracker import ThesisTracker, ThesisStatus, HypothesisStatus
-
+from src.analysis.thesis_tracker import HypothesisStatus, ThesisStatus, ThesisTracker
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -138,7 +136,7 @@ class TestHypothesis:
     def test_confirm_hypothesis(self, tmp_path):
         tracker = _make_tracker(tmp_path)
         tracker.create("Thesis")
-        hyp = tracker.add_hypothesis("Growth >20%", catalyst_date="2020-01-01")
+        tracker.add_hypothesis("Growth >20%", catalyst_date="2020-01-01")
         result = tracker.confirm_hypothesis("Growth >20%", actual_result="+25%")
         assert result["status"] == HypothesisStatus.CONFIRMED
         assert result["actual_result"] == "+25%"

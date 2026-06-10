@@ -5,27 +5,23 @@ distribution chart and PE band chart generation.
 """
 
 import json
-import re
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
+from src.report._html_templates import STEP_CONFIG
 from src.report.generator import (
-    generate_report_html,
-    generate_distribution_chart,
-    generate_pe_band_chart,
-    md_to_html,
+    _auto_embed_workspace_images,
+    _embed_image_as_base64,
     _extract_summary_metrics,
     _read_json_safe,
-    _embed_image_as_base64,
-    _auto_embed_workspace_images,
+    generate_distribution_chart,
+    generate_pe_band_chart,
+    generate_report_html,
+    md_to_html,
 )
-from src.report._html_templates import STEP_CONFIG
-
 
 # ---------------------------------------------------------------------------
 # md_to_html
@@ -75,7 +71,8 @@ class TestMdToHtml:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp)
             # Create a minimal 1x1 PNG
-            import struct, zlib
+            import struct
+            import zlib
             def _make_png():
                 header = b"\x89PNG\r\n\x1a\n"
                 ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
@@ -335,7 +332,8 @@ class TestExtractSummaryMetrics:
 
 def _make_minimal_png():
     """Create a minimal valid 1x1 PNG."""
-    import struct, zlib
+    import struct
+    import zlib
     header = b"\x89PNG\r\n\x1a\n"
     ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
     ihdr_crc = struct.pack(">I", zlib.crc32(b"IHDR" + ihdr) & 0xFFFFFFFF)

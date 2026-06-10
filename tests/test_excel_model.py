@@ -19,7 +19,6 @@ from src.analysis.excel_model import (
 from src.analysis.financial_model import generate_financial_model_artifacts
 from src.analysis.step4_schema import save_structured_assumptions
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
@@ -377,8 +376,7 @@ class TestGenerateExcelModel:
             formula_found = False
             for row in is_ws.iter_rows(values_only=False):
                 for cell in row:
-                    if isinstance(cell.value, str) and cell.value.startswith("="):
-                        if "Revenue Build" in cell.value:
+                    if isinstance(cell.value, str) and cell.value.startswith("=") and "Revenue Build" in cell.value:
                             formula_found = True
                             break
             assert formula_found, "Income Statement should have cross-sheet formulas to Revenue Build"
@@ -432,8 +430,7 @@ class TestGenerateExcelModel:
             blue_count = 0
             for row in rev.iter_rows(min_col=3, values_only=False):
                 for cell in row:
-                    if cell.font and cell.font.color and cell.font.color.rgb:
-                        if "0000CD" in str(cell.font.color.rgb):
+                    if cell.font and cell.font.color and cell.font.color.rgb and "0000CD" in str(cell.font.color.rgb):
                             blue_count += 1
             assert blue_count > 0, "Projection cells should have blue font"
 
@@ -568,7 +565,7 @@ class TestIncomeStatementLineItems:
 
     def test_has_ebt(self):
         assert any(
-            "Pre-tax" in l or "EBT" in l for l in self.labels.split()
+            "Pre-tax" in lbl or "EBT" in lbl for lbl in self.labels.split()
         ), "IS must have Pre-tax Income / EBT row"
 
     def test_has_interest_expense(self):
@@ -651,9 +648,8 @@ class TestBalanceSheetStructure:
         """The Balance Check row should be a formula (Total Assets - Total L&E)."""
         for row in self.bs_ws.iter_rows(values_only=False):
             for cell in row:
-                if isinstance(cell.value, str) and cell.value.startswith("=") and cell.row > 1:
-                    # Look for a formula that subtracts (the balance check)
-                    if "Balance Check" in str(self.bs_ws.cell(row=cell.row, column=1).value or ""):
+                if (isinstance(cell.value, str) and cell.value.startswith("=") and cell.row > 1
+                        and "Balance Check" in str(self.bs_ws.cell(row=cell.row, column=1).value or "")):
                         assert "-" in cell.value, "Balance check should subtract"
                         return
         # Some implementations put the label and formula on different rows — check label presence
@@ -701,8 +697,7 @@ class TestValuationBridgeEnhanced:
         """EBITDA in Valuation Bridge should reference Income Statement."""
         for row in self.vb_ws.iter_rows(values_only=False):
             for cell in row:
-                if isinstance(cell.value, str) and cell.value.startswith("="):
-                    if "Income Statement" in cell.value:
+                if isinstance(cell.value, str) and cell.value.startswith("=") and "Income Statement" in cell.value:
                         return  # Found cross-sheet link
         pytest.fail("Valuation Bridge EBITDA should link to Income Statement")
 
@@ -768,8 +763,7 @@ class TestAssumptionsChecksEnhanced:
         formula_found = False
         for row in self.checks_ws.iter_rows(values_only=False):
             for cell in row:
-                if isinstance(cell.value, str) and cell.value.startswith("="):
-                    if "Balance Sheet" in cell.value and "Income Statement" in cell.value:
+                if isinstance(cell.value, str) and cell.value.startswith("=") and "Balance Sheet" in cell.value and "Income Statement" in cell.value:
                         formula_found = True
                         break
         assert formula_found, "RE Rollforward should reference both BS and IS"
@@ -779,8 +773,7 @@ class TestAssumptionsChecksEnhanced:
         formula_found = False
         for row in self.checks_ws.iter_rows(values_only=False):
             for cell in row:
-                if isinstance(cell.value, str) and cell.value.startswith("="):
-                    if "Balance Sheet" in cell.value:
+                if isinstance(cell.value, str) and cell.value.startswith("=") and "Balance Sheet" in cell.value:
                         formula_found = True
                         break
         assert formula_found, "WC Validation should reference Balance Sheet"

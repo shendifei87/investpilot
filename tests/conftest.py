@@ -1,7 +1,5 @@
 """Shared pytest fixtures for InvestPilot tests."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
 

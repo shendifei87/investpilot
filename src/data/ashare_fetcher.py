@@ -8,8 +8,8 @@ All data sourced exclusively from Tushare Pro API:
   - fina_indicator: EPS, ROE, EBITDA, margins, etc.
 """
 
-from datetime import datetime, timedelta
 import math
+from datetime import datetime, timedelta
 
 from src.data.base import BaseTushareFetcher, FetchResult
 

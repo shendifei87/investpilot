@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from config.settings import WORKSPACES_DIR
 from src.storage import AtomicJSON
@@ -264,7 +263,7 @@ class EdgeScorer:
         self._store.save("edge_score.json", history)
 
     @staticmethod
-    def load_latest(workspace_dir: str) -> Optional[dict]:
+    def load_latest(workspace_dir: str) -> dict | None:
         """Load the most recent edge score for a workspace."""
         store = AtomicJSON(WORKSPACES_DIR / workspace_dir)
         history = store.load("edge_score.json", default=[])

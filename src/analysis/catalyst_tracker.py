@@ -22,8 +22,8 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import datetime, date, timedelta
 import uuid
+from datetime import date, datetime
 
 from src.analysis._base import WorkspaceStateBase
 
@@ -153,10 +153,7 @@ class CatalystTracker(WorkspaceStateBase):
         if not thesis_created_date:
             if self._data["catalysts"]:
                 dates = [c["expected_date"] for c in self._data["catalysts"] if c["status"] == "pending"]
-                if dates:
-                    thesis_created_date = min(dates)
-                else:
-                    thesis_created_date = today.isoformat()
+                thesis_created_date = min(dates) if dates else today.isoformat()
             else:
                 thesis_created_date = today.isoformat()
 
@@ -238,9 +235,9 @@ class CatalystTracker(WorkspaceStateBase):
             if cat["status"] == "resolved":
                 line += f" → {cat['outcome']}"
             elif cat["status"] == "missed":
-                line += f" → MISSED"
+                line += " → MISSED"
             elif cat["expected_date"] < today_str:
-                line += f" → OVERDUE"
+                line += " → OVERDUE"
             lines.append(line)
 
         # Kill switches

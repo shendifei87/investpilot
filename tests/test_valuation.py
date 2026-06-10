@@ -7,9 +7,9 @@ import pytest
 from src.analysis.valuation import (
     calc_historical_pe_series,
     dcf_model,
-    reverse_dcf,
     forward_pe_band,
     load_price_series,
+    reverse_dcf,
 )
 
 

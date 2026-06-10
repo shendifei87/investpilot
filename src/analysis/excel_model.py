@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -110,7 +109,7 @@ def _hist_cl(hist_idx: int) -> str:
 # ── Styling helpers ─────────────────────────────────────────────────────
 
 def _apply_header_style(ws, row: int, max_col: int):
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.styles import Alignment, Font, PatternFill
     for c in range(1, max_col + 1):
         cell = ws.cell(row=row, column=c)
         cell.font = Font(name="Calibri", bold=True, size=10, color=WHITE)
@@ -822,7 +821,7 @@ def _build_balance_sheet_tab(wb, model: dict, is_layout: SheetLayout) -> SheetLa
     # Store key references
     is_rev_row = is_layout["revenue"]
     is_cogs_row = is_layout["cogs"]
-    is_ni_row = is_layout["net_income"]
+    is_layout["net_income"]
 
     # ── ASSETS ──
     r = layout.add("section_assets")
@@ -924,7 +923,7 @@ def _build_balance_sheet_tab(wb, model: dict, is_layout: SheetLayout) -> SheetLa
     r_ppe = layout.add("ppe")
     ws.cell(row=r_ppe, column=1, value="  PP&E (Net)")
     ws.cell(row=r_ppe, column=2, value="Prior PP&E + Capex - D&A (hard-coded: capex/da from model)")
-    prev_ppe = total_base_revenue = sum(
+    prev_ppe = sum(
         _num(s.get("base_revenue"), 0.0) for s in model["segments"]
     ) * inputs.get("ppe_ratio", 0.0)
     ppe_vals = bs_lookup.get("PP&E (Net)", {}).get("values", {})
@@ -1126,7 +1125,7 @@ def _build_balance_sheet_tab(wb, model: dict, is_layout: SheetLayout) -> SheetLa
     r_re = layout.add("retained_earnings")
     ws.cell(row=r_re, column=1, value="  Retained Earnings")
     ws.cell(row=r_re, column=2, value="Prior RE + NI - Dividends")
-    payout = inputs.get("dividend_payout", 0.0)
+    inputs.get("dividend_payout", 0.0)
     for h_idx in range(N_HIST_COLS):
         ws.cell(row=r_re, column=_hist_col(h_idx), value="N/A")
         _apply_historical_font(ws, r_re, _hist_col(h_idx), _hist_col(h_idx))
@@ -1365,7 +1364,7 @@ def _build_cash_flow_tab(wb, model: dict, is_layout: SheetLayout, bs_layout: She
     for h_idx in range(N_HIST_COLS):
         ws.cell(row=r_bc, column=_hist_col(h_idx), value="N/A")
         _apply_historical_font(ws, r_bc, _hist_col(h_idx), _hist_col(h_idx))
-    for idx_p, p in enumerate(periods):
+    for idx_p, _p in enumerate(periods):
         if idx_p == 0:
             ws.cell(row=r_bc, column=_proj_col(idx_p), value=prev_cash)
         else:
@@ -1803,7 +1802,6 @@ def generate_excel_model(workspace_dir: str | Path, ticker: str = "") -> Path:
     Path
         Path to the generated ``step5_3statement_model.xlsx``.
     """
-    import openpyxl
     from openpyxl import Workbook
 
     ws_path = resolve_workspace_path(workspace_dir)
@@ -1830,8 +1828,8 @@ def generate_excel_model(workspace_dir: str | Path, ticker: str = "") -> Path:
             row=bs_layout["cash"], column=_proj_col(idx_p),
         ).value = f"='{cf_ws_name}'!{pcl}{cf_layout['cf_end_cash']}"
 
-    val_layout = _build_valuation_bridge_tab(wb, model, is_layout, bs_layout)
-    checks_layout = _build_assumptions_checks_tab(
+    _build_valuation_bridge_tab(wb, model, is_layout, bs_layout)
+    _build_assumptions_checks_tab(
         wb, model, rev_layout, is_layout, bs_layout, cf_layout,
     )
 

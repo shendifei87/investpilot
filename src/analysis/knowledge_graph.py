@@ -38,12 +38,12 @@ Usage:
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from difflib import get_close_matches
-import uuid
+
 from config.settings import WORKSPACES_DIR
 from src.storage import AtomicJSON
-
 
 # ──────────────────────────────────────────────
 #  Helpers
@@ -338,9 +338,7 @@ class KnowledgeGraph:
                 )
                 if rec_industry == industry:
                     score += 3
-                elif industry in rec_industry or rec_industry in industry:
-                    score += 2
-                elif get_close_matches(industry, [rec_industry], n=1, cutoff=0.6):
+                elif industry in rec_industry or rec_industry in industry or get_close_matches(industry, [rec_industry], n=1, cutoff=0.6):
                     score += 2
 
             # Theme overlap (with fuzzy matching)
@@ -350,9 +348,7 @@ class KnowledgeGraph:
                 for t in themes:
                     if t in record_themes:
                         score += 2
-                    elif any(t in rt for rt in record_themes):
-                        score += 1
-                    elif get_close_matches(t, list(record_themes), n=1, cutoff=0.6):
+                    elif any(t in rt for rt in record_themes) or get_close_matches(t, list(record_themes), n=1, cutoff=0.6):
                         score += 1
 
             # Moat match (normalized)
@@ -465,9 +461,9 @@ class KnowledgeGraph:
             if keyword.lower() in p["pattern"].lower() or keyword.lower() in " ".join(p.get("setup_conditions", [])).lower():
                 results.append({"type": "pattern", **p})
 
-        for l in self._data.get("lessons", []):
-            if keyword.lower() in l["lesson"].lower() or keyword.lower() in l["context"].lower():
-                results.append({"type": "lesson", **l})
+        for lesson in self._data.get("lessons", []):
+            if keyword.lower() in lesson["lesson"].lower() or keyword.lower() in lesson["context"].lower():
+                results.append({"type": "lesson", **lesson})
 
         return results
 

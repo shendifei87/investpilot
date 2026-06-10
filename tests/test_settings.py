@@ -1,6 +1,5 @@
 """Tests for config.settings environment handling."""
 
-from pathlib import Path
 
 
 def test_get_env_value_prefers_environment(monkeypatch, tmp_path):

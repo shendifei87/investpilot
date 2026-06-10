@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import calendar
 import copy
-from datetime import datetime, date
-from enum import Enum
-from typing import Optional
 import uuid
+from datetime import date, datetime
+from enum import Enum
 
 from src.analysis._base import WorkspaceStateBase
 from src.analysis.catalyst_tracker import CatalystTracker
@@ -52,7 +51,7 @@ class ThesisTracker(WorkspaceStateBase):
         super().__init__(workspace_dir)
         self._catalyst_tracker = CatalystTracker(workspace_dir)
 
-    def _current(self) -> Optional[dict]:
+    def _current(self) -> dict | None:
         """Return the latest thesis revision, or None."""
         h = self._data.get("history", [])
         return h[-1] if h else None
@@ -344,13 +343,13 @@ class ThesisTracker(WorkspaceStateBase):
         current = self._current()
         lines = [
             f"# Thesis Update Brief: {snap['ticker_workspace']}",
-            f"",
+            "",
             f"**Core Thesis** (v{snap['revision']}): {snap['core_thesis']}",
             f"**Status**: {snap['status']} | Created: {snap['created']} | Last update: {snap['updated']}",
             f"**Time Decay**: {'ACTIVE' if snap['time_decay_active'] else 'Not yet'} (starts {snap['time_decay_start']})",
-            f"",
+            "",
             f"## Hypothesis Tracker ({snap['hypotheses_summary']['confirmation_rate']} confirmed)",
-            f"",
+            "",
         ]
 
         for hyp in current.get("hypotheses", []):
@@ -363,23 +362,23 @@ class ThesisTracker(WorkspaceStateBase):
             lines.append(line)
 
         if snap["overdue_catalysts"]:
-            lines.append(f"\n## ⚠️ Overdue Catalysts")
+            lines.append("\n## ⚠️ Overdue Catalysts")
             for c in snap["overdue_catalysts"]:
                 lines.append(f"- **{c['event']}** — expected {c['expected_date']}, still pending")
 
         kill_switches = snap.get("kill_switches", [])
         triggered = [ks for ks in kill_switches if isinstance(ks, dict) and ks.get("triggered")]
         if triggered:
-            lines.append(f"\n## 🚨 Triggered Kill Switches")
+            lines.append("\n## 🚨 Triggered Kill Switches")
             for ks in triggered:
                 lines.append(f"- **{ks['condition']}** — {ks.get('evidence', '')}")
 
-        lines.append(f"\n## Next Steps")
+        lines.append("\n## Next Steps")
         pending_hyps = [h for h in current.get("hypotheses", []) if h["status"] == HypothesisStatus.PENDING]
         if pending_hyps:
             lines.append(f"- {len(pending_hyps)} hypotheses pending — check if any new data resolves them")
         if snap["time_decay_active"]:
-            lines.append(f"- Time decay active — prioritize thesis validation or revision")
-        lines.append(f"- Only update changed sections (no need to redo all 6 steps)")
+            lines.append("- Time decay active — prioritize thesis validation or revision")
+        lines.append("- Only update changed sections (no need to redo all 6 steps)")
 
         return "\n".join(lines)

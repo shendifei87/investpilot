@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from src.analysis._base import resolve_workspace_path
-from src.analysis._utils import coerce_float as _num, is_pct_variable as _is_pct_variable
+from src.analysis._utils import coerce_float as _num
+from src.analysis._utils import is_pct_variable as _is_pct_variable
 from src.analysis.step4_schema import load_structured_assumptions
 from src.storage import AtomicJSON
+
 
 # Lazy import to avoid circular deps — config.settings is lightweight
 def _validation_settings() -> dict:

@@ -1,4 +1,4 @@
-from typing import Literal, Tuple
+from typing import Literal
 
 # Shanghai codes: 600xxx, 601xxx, 603xxx, 605xxx, 688xxx (STAR), 689xxx (STAR)
 # Shenzhen codes: 000xxx, 001xxx, 002xxx, 003xxx, 300xxx (ChiNext), 301xxx
@@ -21,7 +21,7 @@ def _ashare_suffix(code: str) -> str:
     return ".SS" if code[:2] in _SHANGHAI_PREFIXES else ".SZ"
 
 
-def normalize_ticker(ticker: str, market: str = None) -> Tuple[str, str]:
+def normalize_ticker(ticker: str, market: str = None) -> tuple[str, str]:
     if market is None:
         market = detect_market(ticker)
 

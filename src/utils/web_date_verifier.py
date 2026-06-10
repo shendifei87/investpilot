@@ -28,10 +28,8 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
-from typing import Optional
-from urllib.parse import urlparse
+from dataclasses import asdict, dataclass
+from datetime import datetime
 
 import requests
 
@@ -74,14 +72,14 @@ class VerifyResult:
     url: str
     claim: str = ""
     source: str = ""
-    actual_date: Optional[str] = None
+    actual_date: str | None = None
     status: str = "unknown"  # ok | outdated | no_date | fetch_error
     message: str = ""
     fetched_at: str = ""
     raw_snippet: str = ""  # date 周围的上下文，用于人工复核
 
 
-def _extract_date_from_url(url: str) -> Optional[str]:
+def _extract_date_from_url(url: str) -> str | None:
     """从 URL 路径中提取日期（很多新闻 URL 包含日期，如 /2026-05-27/）。"""
     # Common URL date patterns: /2026-05-27/, /2026/05/27/, /20260527/
     m = re.search(r"/(20\d{2})[/\-](\d{1,2})[/\-](\d{1,2})/", url)
@@ -93,7 +91,7 @@ def _extract_date_from_url(url: str) -> Optional[str]:
     return None
 
 
-def _extract_date_from_html(html: str, url: str = "") -> Optional[str]:
+def _extract_date_from_html(html: str, url: str = "") -> str | None:
     """从 HTML 中提取发布日期。优先级：meta标签 > URL日期 > 正文前部日期。"""
     candidates: list[str] = []
 
@@ -129,7 +127,7 @@ def _extract_date_from_html(html: str, url: str = "") -> Optional[str]:
     return candidates[0][1]
 
 
-def _normalize_date_str(raw: str) -> Optional[str]:
+def _normalize_date_str(raw: str) -> str | None:
     """将各种日期格式统一为 YYYY-MM-DD。"""
     raw = raw.strip()
 
@@ -365,7 +363,7 @@ def main():
             print_verification_report([asdict(result)])
     elif args.input:
         # Batch mode from JSON file
-        with open(args.input, "r", encoding="utf-8") as f:
+        with open(args.input, encoding="utf-8") as f:
             evidence = json.load(f)
         results = verify_evidence_list(evidence, max_age_days=args.max_age, timeout=args.timeout)
         if args.json:

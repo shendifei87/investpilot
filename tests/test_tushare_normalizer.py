@@ -4,20 +4,17 @@ Covers: all 5 normalize functions, Chinese alias generation, date parsing,
 deduplication, gross profit computation, empty/None input handling.
 """
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from src.data.tushare_normalizer import (
-    normalize_price_df,
-    normalize_income_df,
+    _add_alias,
+    _parse_date_column,
     normalize_balance_df,
     normalize_cashflow_df,
     normalize_fina_indicator_df,
-    _parse_date_column,
-    _add_alias,
+    normalize_income_df,
+    normalize_price_df,
 )
-
 
 # ---------------------------------------------------------------------------
 # _parse_date_column

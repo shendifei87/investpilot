@@ -11,10 +11,10 @@ Data sources:
 Fallback chain: AKShare → Tushare → empty result with warning
 """
 
+import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional
-import time
-import logging
 
 import pandas as pd
 
@@ -197,7 +197,9 @@ class HKFetcher(BaseFetcher):
             try:
                 from src.data.tushare_client import tushare_client
                 from src.data.tushare_normalizer import (
-                    normalize_income_df, normalize_balance_df, normalize_cashflow_df,
+                    normalize_balance_df,
+                    normalize_cashflow_df,
+                    normalize_income_df,
                 )
                 ts_code = f"{ticker}.HK" if not ticker.endswith(".HK") else ticker
                 start = (datetime.now() - timedelta(days=365 * 5)).strftime("%Y%m%d")

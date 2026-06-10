@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 
 
 def calc_ma(close: pd.Series, windows: list = None) -> pd.DataFrame:

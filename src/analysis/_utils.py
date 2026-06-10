@@ -21,9 +21,7 @@ def coerce_float(value, default: float | None = None) -> float | None:
             return default
         # Detect and remove suffix markers
         is_pct = text.endswith("%")
-        if is_pct:
-            text = text[:-1]
-        elif text.endswith("x") or text.endswith("X"):
+        if is_pct or text.endswith("x") or text.endswith("X"):
             text = text[:-1]
         try:
             num = float(text)

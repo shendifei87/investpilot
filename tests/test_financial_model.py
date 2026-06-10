@@ -545,7 +545,7 @@ class TestInterestModeling:
             income = model["statements"]["income_statement"]
             # Should have an Interest Income row
             labels = [r["label"] for r in income]
-            assert any("Interest Income" in l or "Interest Inc" in l for l in labels), (
+            assert any("Interest Income" in lbl or "Interest Inc" in lbl for lbl in labels), (
                 "IS must have Interest Income row"
             )
             # EBT should differ from EBIT due to interest income

@@ -8,13 +8,12 @@ risk factors, thesis-conflicting evidence, etc.).
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import uuid
 
 from src.analysis._base import WorkspaceStateBase
-
 
 DOCUMENT_TYPES = {
     "annual_report",
@@ -347,7 +346,7 @@ class MaterialTracker(WorkspaceStateBase):
                     continue
 
             doc_type = "broker_report" if path.suffix.lower() == ".pdf" else "other"
-            lower_name = path.name.lower()
+            path.name.lower()
             stem = path.stem.lower()
             if any(token in stem for token in ["annual", "年报", "10-k", "10k"]):
                 doc_type = "annual_report"

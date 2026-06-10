@@ -1,8 +1,10 @@
 import json
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
+
 import pandas as pd
+
 from config.settings import CACHE_DIR
 
 

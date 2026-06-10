@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from scipy.stats import norm, t as t_dist
+from scipy.stats import norm
+from scipy.stats import t as t_dist
+
 from config.settings import MONTE_CARLO_SIMULATIONS, WORKSPACES_DIR
 from src.analysis._base import resolve_workspace_path
 from src.storage import AtomicJSON
-
 
 # ──────────────────────────────────────────────
 #  Distribution classes
@@ -309,10 +312,7 @@ def run_monte_carlo(
     # Record seed BEFORE creating rng so it can reproduce the full run.
     # When seed=None, generate a fresh seed from OS entropy so the rng
     # created below starts from a known, recorded state.
-    if seed is not None:
-        actual_seed = seed
-    else:
-        actual_seed = int(np.random.default_rng().integers(0, 2**63))
+    actual_seed = seed if seed is not None else int(np.random.default_rng().integers(0, 2 ** 63))
 
     rng = np.random.default_rng(actual_seed)
 
@@ -474,10 +474,7 @@ def run_monte_carlo_cumulative(
     if n_simulations is None:
         n_simulations = MONTE_CARLO_SIMULATIONS
 
-    if seed is not None:
-        actual_seed = seed
-    else:
-        actual_seed = int(np.random.default_rng().integers(0, 2**63))
+    actual_seed = seed if seed is not None else int(np.random.default_rng().integers(0, 2 ** 63))
 
     rng = np.random.default_rng(actual_seed)
 
@@ -530,10 +527,7 @@ def calc_rrr(price_distribution: np.ndarray, current_price: float) -> dict:
     e_upside = np.mean(upside[up_mask]) if p_up > 0 else 0
     e_downside = abs(np.mean(upside[down_mask])) if p_down > 0 else 0
 
-    if p_down * e_downside == 0:
-        rrr = float("inf")
-    else:
-        rrr = (p_up * e_upside) / (p_down * e_downside)
+    rrr = float("inf") if p_down * e_downside == 0 else p_up * e_upside / (p_down * e_downside)
 
     # Kelly Criterion: f* = (p*b - q) / b, where b = odds = E[up]/E[down]
     kelly_full = 0.0
@@ -854,9 +848,8 @@ def _compute_calibration_stats(records: list) -> dict:
 
         # Check if actual fell within P30-P70
         pctl = r.get("predicted_percentiles")
-        if pctl and 30 in pctl and 70 in pctl:
-            if pctl[30] <= actual <= pctl[70]:
-                in_range_count += 1
+        if pctl and 30 in pctl and 70 in pctl and pctl[30] <= actual <= pctl[70]:
+            in_range_count += 1
 
     n = len(errors)
     mean_err = sum(errors) / n

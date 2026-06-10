@@ -12,8 +12,6 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from src.analysis._base import WorkspaceStateBase
 from src.contracts import (
     STEP_DEPENDENCIES,
@@ -23,6 +21,8 @@ from src.contracts import (
     get_step_contract,
     normalize_step_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _clear_guard_artifacts(workspace: Path, step_id: int | str) -> None:
@@ -73,7 +73,7 @@ class ResearchWorkflow(WorkspaceStateBase):
         changed = False
         steps = self._data.setdefault("steps", {})
 
-        previous_version = int(self._data.get("version", 1) or 1)
+        int(self._data.get("version", 1) or 1)
         obsolete = {"4a", "4b", "4c"}
         for step in obsolete:
             if step in steps:
