@@ -91,22 +91,11 @@ python -m src.cli report {workspace_dir}
 
 ### Post-Research: Thesis & Catalyst Init
 
-After all steps complete, initialize tracking:
-- `ThesisTracker`: create thesis, add hypotheses, link kill switches
-- `CatalystTracker`: add catalyst events and kill switches with time decay
-- `EdgeScorer`: score analytical/informational/temporal/structural edges
-- `KnowledgeGraph`: record research for cross-stock pattern matching
+After all steps complete, initialize ThesisTracker, CatalystTracker, EdgeScorer, KnowledgeGraph. Full code: `prompts/09_research_director_review.md` Appendix A.
 
-See `prompts/09_research_director_review.md` Appendix A for full code examples.
+### Incremental Update Mode
 
-### Incremental Update Mode (Thesis Revisit)
-
-When the user asks to revisit a previously researched stock with an existing `thesis.json` (status: open):
-
-1. Run `ThesisTracker.generate_update_brief()` to get context
-2. Check `CatalystTracker.time_decay_status()` → apply conviction_modifier to RRR and Kelly
-3. Update only what changed (new earnings, new catalysts, hypothesis validation)
-4. Confirm or invalidate hypotheses; revise thesis if needed
+For revisiting stocks with open thesis. Full workflow: `prompts/09_research_director_review.md` Appendix B.
 
 ## Market Rules
 
@@ -149,28 +138,11 @@ These are **hard errors**:
 
 ## Trading Strategy Framework
 
-- RRR = P_up × E[upside] / P_down × E[downside]
-- RRR > 2.0 → build position; 1.0–2.0 → wait for catalyst; < 1.0 → pass
-- **Position = Kelly Half upper limit** (derived from RRR, not manually set)
-- **Time decay adjustment**: Kelly × conviction_modifier (from catalyst_tracker)
-- Forward year dual calculation: show both T+1 and T+2 RRR (add T+3 for major changes)
-- Entry price RRR recalculation: must recalculate at suggested pullback entry price
-- Left-side entry: catalyst delay / systemic pullback / extreme panic
-- Right-side entry: earnings inflection / product ramp / peer multiple expansion
-- Stop-loss = fundamental falsification (kill switch trigger); Take-profit = near optimistic target
+Key thresholds: RRR > 2.0 → build; 1.0–2.0 → wait; < 1.0 → pass. Position = Kelly Half. Time decay adjusts Kelly. Full framework: `prompts/07_rrr_strategy.md`.
 
 ## Edge Classification
 
-Every research must include Edge scoring (Step 3.5):
-
-| Edge Type | Definition | Decay Speed |
-|:----------|:-----------|:------------|
-| Analytical | Deeper processing of public information | High (1–3 months) |
-| Temporal | Willingness to wait longer | None (self-controlled) |
-| Informational | Information not fully digested by the market | Very high (days–weeks) |
-| Structural | Market structure distortions (passive flows / forced selling) | Low (persistent) |
-
-Edge sustainability affects execution: low sustainability → prioritize speed; high sustainability → can wait for better entry.
+Edge scoring at Step 3.5 with four types (Analytical, Temporal, Informational, Structural). Edge sustainability affects execution speed. Definitions and decay speeds: `prompts/03_marginal_changes.md` §3.5.
 
 ## Contrarian Checks (Mandatory, Every Step)
 
@@ -202,76 +174,13 @@ This is not a formality — if contrarian checks reveal material issues, trace b
 
 ## MCP Real-Time Data Layer
 
-InvestPilot uses a **multi-source data architecture**: Python clients for batch data + MCP tools for real-time supplementary data + AKShare for HK/US coverage.
-
-### Architecture
-
-| Layer | Tool | Market | When | Purpose |
-|:------|:-----|:-------|:-----|:--------|
-| Batch | `python -m src.cli fetch` | A-share | Before Step 0 | Download financials, prices, indices to CSV |
-| Real-time | `tushareMcp__*` MCP tools | A-share | During each step | Supplement with latest data (capital flow, news, peers) |
-| HK data | AKShare (Python) | HK | During HK research | Daily prices, financials, industry comparisons |
-| US data | AKShare (Python) | US | During US research | Daily prices, macro data |
-| US financials | WebSearch + SEC EDGAR | US | During US research | Financial statements, SEC filings |
-| Fallback | WebSearch + `web-reader` | All | When primary source fails | News, announcements, broker ratings |
-
-### Integration Pattern
-
-Each step's prompt file (`prompts/NN_*.md`) contains a `## MCP 实时数据管道` section at the end with:
-1. MCP tools to call (with parameter examples)
-2. Call order (data burst → analysis → write output)
-3. Relationship to existing Python pipeline (supplement, never replace)
-4. Market adaptation notes (A-share / HK / US)
-
-### Available MCP Tools (2000 Tushare Points)
-
-**Financial data**: `daily_basic`, `fina_mainbz`, `fina_indicator`, `income`, `balancesheet`, `cashflow`, `forecast`, `express`, `top10_holders`, `top10_floatholders`, `stk_holdernumber`, `dividend`, `pledge_detail`, `adj_factor`
-
-**Capital flow**: `moneyflow_dc`, `moneyflow_hsgt`, `hk_hold`, `margin_detail`, `block_trade`, `repurchase`, `stk_holdertrade`
-
-**Industry/peers**: `index_member_all`, `sw_daily`, `concept_detail`, `index_daily`
-
-**Market data**: `daily`, `stk_limit`, `top_list`, `top_inst`
-
-**HK/US**: ~~Tushare hk_*/us_* APIs not purchased~~ → Use AKShare instead:
-- HK: `stock_hk_daily()`, `stock_hk_financial_indicator_em()`, `stock_hk_valuation_comparison_em()`, `stock_hk_growth_comparison_em()`, `stock_hk_company_profile_em()`. Tushare `moneyflow_hsgt`/`hk_hold` for southbound flow.
-- US: `stock_us_daily()`, `stock_us_spot_em()`, `macro_usa_*()` (40+ indicators)
-- US financials: WebSearch + SEC EDGAR + `financial-analysis` skills
-
-**Reading**: `web-reader` (fetch URL content), `zai-mcp-server` (OCR, image analysis)
-
-### Recommended Skills
-
-| Skill | Step | Purpose |
-|:------|:-----|:--------|
-| `deep-research` | 0, 3 | Multi-source fact-checking for catalysts |
-| `financial-analysis:dcf-model` | 5 | DCF Excel cross-validation |
-| `financial-analysis:comps-analysis` | 2, 5 | Comparable company analysis Excel |
-| `financial-analysis:xlsx-author` | 5 | Three-year EPS Bridge workbook |
-| `financial-analysis:pptx-author` | 9 | IC presentation deck |
-| `financial-analysis:audit-xls` | 8 | Audit Excel models |
+Multi-source architecture: Python batch + MCP real-time + AKShare (HK/US). Each step's prompt file has a `## MCP 实时数据管道` section with specific tools, call order, and market adaptation.
 
 ### Hard Rules
 
-1. **MCP supplements, never replaces**: ConsensusTracker, MaterialTracker, and Python pipelines remain authoritative
-2. **Valuation self-calculation still applies**: PE/PB from `daily_basic` are for sanity-check only; all formal valuations use `calc_pe`/`calc_pb`
-3. **Empty MCP response → WebSearch fallback**: Never block the pipeline on a failed MCP call
+1. **MCP supplements, never replaces**: ConsensusTracker, MaterialTracker, Python pipelines remain authoritative
+2. **Valuation self-calculation still applies**: PE/PB from `daily_basic` are for sanity-check only; formal valuations use `calc_pe`/`calc_pb`
+3. **Empty MCP response → WebSearch fallback**: Never block on a failed MCP call
 4. **No APIs exceeding 2000 points**: Only confirmed 2000-point-or-below APIs are listed in prompt files
-5. **HK/US use AKShare, not Tushare**: Tushare HK/US modules not purchased. AKShare (free, no registration) is the primary source for HK/US data. US financial statements require WebSearch + SEC EDGAR fallback.
-6. **🚨 WebSearch必须验证发布日期**: WebSearch/web_search_prime 可能返回过期文章（1-3年前）被搜索引擎错误匹配为近期内容。每条关键证据必须用 `web-reader` 打开源链接确认实际发布日期。特别注意：券商评级/目标价变更、股东增减持、业绩预告等时效性信息。无明确日期的来源不得作为证据引用。
-
-   **程序化验证（推荐）**：
-   ```bash
-   # 单个 URL 验证
-   python -m src.cli verify-news --url "https://..." --max-age 90
-
-   # 批量验证（stdin JSON）
-   echo '[{"url":"https://...","claim":"...","source":"..."}]' | python -m src.cli verify-news --max-age 90
-
-   # 批量验证（文件）
-   python -m src.cli verify-news evidence.json --max-age 90 --json
-   ```
-
-   返回每条证据的状态：`ok`（有效）| `outdated`（过期，禁止引用）| `no_date`（无法提取日期，禁止引用）| `fetch_error`（抓取失败）。
-
-   **JS渲染页面**（如财联社 cls.cn）：`requests` 无法抓取动态内容，返回 `no_date`。此时需用 `web-reader` MCP 工具手动确认日期，或标记为"日期未验证"。
+5. **HK/US use AKShare, not Tushare**: AKShare is primary for HK/US data. US financials require WebSearch + SEC EDGAR fallback.
+6. **🚨 WebSearch必须验证发布日期**: 过期文章可能被错误匹配为近期内容。关键证据必须用 `web-reader` 确认日期。程序化验证: `python -m src.cli verify-news --url "..." --max-age 90`。详见全局 CLAUDE.md 的完整验证规则和代码示例。

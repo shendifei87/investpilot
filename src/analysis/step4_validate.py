@@ -140,8 +140,17 @@ def _canonical_variable_set(variables) -> set[str]:
 
 
 def _validate_percentile_order(row: dict, label: str, keys: tuple[str, ...]) -> dict:
-    values = []
-    missing = []
+    """Validate percentile monotonicity.
+
+    For ``direction: lower_is_better`` variables (e.g. cost_to_income_ratio,
+    credit_cost, NPL, tax_rate) the percentiles should be *reverse* monotonic:
+    p10 ≥ p30 ≥ p50 ≥ p70 ≥ p90 (higher cost in bear case, lower in bull).
+    """
+    direction = str(row.get("direction", "")).lower()
+    lower_is_better = direction == "lower_is_better"
+
+    values: list[tuple[str, float]] = []
+    missing: list[str] = []
     for key in keys:
         val = _to_float(row.get(key))
         if val is None:
@@ -156,15 +165,25 @@ def _validate_percentile_order(row: dict, label: str, keys: tuple[str, ...]) -> 
             "detail": f"{label} missing percentile values: {missing}",
         }
 
-    bad = [
-        f"{values[i][0]}={values[i][1]} > {values[i + 1][0]}={values[i + 1][1]}"
-        for i in range(len(values) - 1)
-        if values[i][1] > values[i + 1][1]
-    ]
+    if lower_is_better:
+        # Reverse monotonic: p10 >= p30 >= p50 >= p70 >= p90
+        bad = [
+            f"{values[i][0]}={values[i][1]} < {values[i + 1][0]}={values[i + 1][1]}"
+            for i in range(len(values) - 1)
+            if values[i][1] < values[i + 1][1]
+        ]
+    else:
+        # Standard monotonic: p10 <= p30 <= p50 <= p70 <= p90
+        bad = [
+            f"{values[i][0]}={values[i][1]} > {values[i + 1][0]}={values[i + 1][1]}"
+            for i in range(len(values) - 1)
+            if values[i][1] > values[i + 1][1]
+        ]
+    detail_suffix = " (lower_is_better, reverse monotonic)" if lower_is_better else ""
     return {
         "check": f"percentile_order:{label}",
         "status": "FAIL" if bad else "PASS",
-        "detail": "; ".join(bad) if bad else f"{label} percentiles are monotonic",
+        "detail": "; ".join(bad) + detail_suffix if bad else f"{label} percentiles are monotonic{detail_suffix}",
     }
 
 
@@ -484,14 +503,31 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
         })
 
     # ── Check 10: DCF cross-validation ──
+    # Bank DDM vs PB-ROE has structural divergence; relax threshold.
+    _reviewed_fallback: dict = {}
+    _reviewed_path = filepath.parent / "_reviewed_assumptions.json"
+    if _reviewed_path.exists():
+        try:
+            _reviewed_fallback = json.loads(_reviewed_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    valuation_mode = str(
+        structured.get("financial_model_inputs", {}).get(
+            "valuation_mode",
+            _reviewed_fallback.get("valuation_mode", ""),
+        )
+    ).lower()
+    is_bank = "bank" in valuation_mode or "pb" in valuation_mode
+    dcf_threshold = 0.50 if is_bank else 0.30
     dcf = structured.get("dcf_cross_validation", {})
     if dcf and "deviation_pct" in dcf:
         dev = _to_float(dcf.get("deviation_pct"))
         checks.append({
             "check": "dcf_cross_validation",
-            "status": "PASS" if dev is not None and abs(dev) < 0.30 else "FAIL",
+            "status": "PASS" if dev is not None and abs(dev) < dcf_threshold else "FAIL",
             "detail": (
                 f"DCF vs MC deviation: {dev:.1%}"
+                f"{' (bank mode, threshold 50%)' if is_bank else ''}"
                 if dev is not None
                 else "dcf_cross_validation.deviation_pct must be numeric"
             ),

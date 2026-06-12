@@ -211,6 +211,7 @@ In incremental update mode, only update what changed (new data, new catalysts, h
 
 4. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{10天前}", end_date="{今天}")
    → 近 10 天资金流向（大单/中单/小单净额）
+   ⚠️ **注意**: `moneyflow_dc` 在 2000 积分下可能返回权限错误 (code 40203)。如遇此情况，降级使用 `moneyflow` API（数据粒度较低但可用）
 
 5. 卖方评级与目标价：
    → WebSearch 搜索 "{ticker} 券商评级 目标价" 或 "{ticker} analyst ratings target price"
@@ -224,3 +225,20 @@ In incremental update mode, only update what changed (new data, new catalysts, h
 1. `daily_basic` 返回的 PE/PB 仅供粗筛参考，不得作为估值结论引用
 2. 所有估值结论必须通过 `calc_pe`/`calc_pb` 自算，标注 `source: calculated`
 3. 不确定能否在 2000 积分下使用的 API 已排除，改用 WebSearch
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**

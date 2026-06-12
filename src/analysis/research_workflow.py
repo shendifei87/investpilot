@@ -261,6 +261,18 @@ class ResearchWorkflow(WorkspaceStateBase):
             logger.warning("Auto-report generation failed: %s", e)
             reports["report_error"] = str(e)
 
+        # Markdown summary — non-blocking
+        try:
+            from src.report.generator import generate_summary_md
+
+            ticker = self.workspace.name
+            path = generate_summary_md(ws_str, ticker=ticker, company_name="")
+            reports["summary"] = str(path)
+            self._record("auto_report", "9", f"Summary MD: {path}")
+        except Exception as e:
+            logger.warning("Auto-summary generation failed: %s", e)
+            reports["summary_error"] = str(e)
+
         # Verify required artifacts exist
         ticker = self.workspace.name
         today = datetime.now().strftime("%Y%m%d")

@@ -144,6 +144,85 @@ For each segment, output:
 - Raw material cost trends and impact on gross margin
 - Changes in supplier bargaining power
 
+## Phase 4: Bank-Specific Analysis (Bank Stocks Only)
+
+**When the target company is a bank** (e.g., postal savings, commercial, or policy bank), add the following structured sections **before the Output Format section**. Replace the generic "Supply Chain" (1.6) with the bank-specific fund supply chain already shown in the main analysis, and add these quantitative tables.
+
+### 1.6B Net Interest Margin (NIM) Decomposition
+
+Decompose NIM into its components with at least 4 quarters of history:
+
+```markdown
+### 1.6B NIM Decomposition
+
+| Component | 2024Q1 | 2024H1 | 2024Q3 | 2024FY | 2025Q1 | 2025H1 | 2025Q3 | 2025FY | 2026Q1 |
+|:----------|:-------|:-------|:-------|:-------|:-------|:-------|:-------|:-------|:-------|
+| 生息资产收益率 | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% |
+| 付息负债成本率 | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% |
+| **净息差 (NIM)** | **X.XX%** | **X.XX%** | **X.XX%** | **X.XX%** | **X.XX%** | **X.XX%** | **X.XX%** | **X.XX%** | **X.XX%** |
+| 存款付息率 | X.XX% | — | — | X.XX% | X.XX% | — | — | X.XX% | X.XX% |
+| 贷款收益率 | X.XX% | — | — | X.XX% | X.XX% | — | — | X.XX% | X.XX% |
+
+**NIM Trend Verdict**: [Compressing / Stable / Expanding] — [One-sentence driver explanation]
+```
+
+### 1.6C Credit Quality Dashboard
+
+```markdown
+### 1.6C Credit Quality Dashboard
+
+| Metric | 2024Q1 | 2024H1 | 2024Q3 | 2024FY | 2025Q1 | 2025H1 | 2025Q3 | 2025FY | 2026Q1 |
+|:-------|:-------|:-------|:-------|:-------|:-------|:-------|:-------|:-------|:-------|
+| 不良率 (NPL) | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% |
+| 拨备覆盖率 | XXX% | XXX% | XXX% | XXX% | XXX% | XXX% | XXX% | XXX% | XXX% |
+| 关注类贷款率 | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% |
+| 信用成本 | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% |
+| 拨贷比 | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% | X.XX% |
+
+**Credit Trend Verdict**: [Deteriorating / Stable / Improving] — [One-sentence driver]
+**Kill Switch Proximity**: NPL at X.XX% vs threshold X.XX% → [Safe / Approaching / Breached]
+```
+
+### 1.6D Capital Adequacy & Regulatory Metrics
+
+```markdown
+### 1.6D Capital Adequacy
+
+| Metric | 2024FY | 2025H1 | 2025FY | 2026Q1 |
+|:-------|:-------|:-------|:-------|:-------|
+| 核心一级资本充足率 | X.XX% | X.XX% | X.XX% | X.XX% |
+| 一级资本充足率 | X.XX% | X.XX% | X.XX% | X.XX% |
+| 资本充足率 | X.XX% | X.XX% | X.XX% | X.XX% |
+| 杠杆率 | X.XX% | X.XX% | X.XX% | X.XX% |
+| 总资产 (万亿) | XX.XX | XX.XX | XX.XX | XX.XX |
+| 风险加权资产 (万亿) | XX.XX | XX.XX | XX.XX | XX.XX |
+
+**Capital Verdict**: [Adequate / Tight / Surplus] — [One sentence on capital trajectory]
+```
+
+### 1.6E Fund Supply Chain Diagram (Banks)
+
+Replace generic supply chain (1.6) with a fund flow diagram:
+
+```
+资金来源（负债端）                    资金运用（资产端）
+┌─────────────┐                  ┌──────────────┐
+│ 客户存款 XX万亿  │ ─── NIM X.XX% ──→ │ 客户贷款 XX万亿   │
+│ (付息率 X.XX%)   │                  │ (收益率 X.XX%)    │
+├─────────────┤                  ├──────────────┤
+│ 同业负债 XX万亿   │                  │ 金融投资 XX万亿    │
+│ (付息率 X.XX%)   │                  │ (收益率 X.XX%)    │
+├─────────────┤                  ├──────────────┤
+│ 其他负债 XX万亿   │                  │ 同业资产 XX万亿    │
+└─────────────┘                  └──────────────┘
+```
+
+**Bank-specific guidance for Step 4/5/6**:
+- Step 4 assumptions should decompose earnings into: **NIM × Earning Assets ± Credit Cost ± Fee Income**
+- Step 5 model uses `bank_financial_model.py` → `project_bank_earnings()`
+- Step 6 Monte Carlo should vary NIM (±10-20bp), credit cost (±20-40bp), fee growth (±5-15%)
+- Step 7 RRR uses **PB** as primary valuation metric (not PE); DDM as auxiliary
+
 ## Output Format
 
 For each sub-item, **conclusion first, evidence follows** — no boilerplate:
@@ -301,3 +380,20 @@ After completing 1.1-1.7, answer these two core questions (max 150 words):
 1. `fina_mainbz` 返回分部数据，应与年报 MD&A 交叉验证，不一致时以年报为准
 2. 所有 MCP 数据均须通过 `MaterialTracker.record_extraction()` 记录来源
 3. **港股科目命名不统一**：`financial.py` alias 为 best-effort 映射，无法覆盖所有港股公司用词。遇到 alias 未命中时，手动 pivot CSV 并检查 `ind_name` 列中的实际科目名，补充映射。
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**

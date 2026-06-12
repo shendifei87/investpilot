@@ -12,7 +12,7 @@ arrives in uneven shapes across A-share, HK, and US research workflows.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.analysis._base import WorkspaceStateBase
@@ -292,6 +292,34 @@ class ConsensusTracker(WorkspaceStateBase):
     def snapshot(self) -> dict:
         import copy
         return copy.deepcopy(self._data)
+
+    def is_stale(self, max_age_days: int = 90) -> dict:
+        """Check if the latest consensus snapshot is older than *max_age_days*.
+
+        Returns a dict with ``stale`` (bool), ``age_days`` (int|None),
+        ``as_of`` (str|None), and ``warning`` (str).
+        """
+        latest = self.latest_snapshot()
+        if not latest:
+            return {"stale": True, "age_days": None, "as_of": None,
+                    "warning": "No consensus snapshot recorded."}
+
+        as_of_str = latest.get("as_of", "")
+        try:
+            snap_date = datetime.strptime(as_of_str, "%Y-%m-%d")
+        except ValueError:
+            return {"stale": True, "age_days": None, "as_of": as_of_str,
+                    "warning": f"Cannot parse as_of date: {as_of_str}"}
+
+        age = (datetime.now() - snap_date).days
+        return {
+            "stale": age > max_age_days,
+            "age_days": age,
+            "as_of": as_of_str,
+            "warning": (f"Consensus snapshot is {age} days old (threshold: {max_age_days}). "
+                        f"Refresh before relying on consensus assumptions for valuation.")
+                       if age > max_age_days else "",
+        }
 
     def generate_step3_brief(self) -> str:
         """Generate a markdown brief for Step 3 to consume."""

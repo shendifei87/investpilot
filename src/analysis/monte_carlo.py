@@ -15,6 +15,7 @@ from src.storage import AtomicJSON
 #  Distribution classes
 # ──────────────────────────────────────────────
 
+
 class NormalDist:
     """Pure numpy normal distribution with optional truncation."""
 
@@ -83,33 +84,55 @@ class LogNormalDist:
 
     @property
     def mean(self):
-        return np.exp(self.mu + self.sigma ** 2 / 2)
+        return np.exp(self.mu + self.sigma**2 / 2)
 
     @property
     def std(self):
-        return self.mean * np.sqrt(np.exp(self.sigma ** 2) - 1)
+        return self.mean * np.sqrt(np.exp(self.sigma**2) - 1)
 
 
 # ──────────────────────────────────────────────
 #  Numerical helpers
 # ──────────────────────────────────────────────
 
+
 def _ndtri(p):
     """Normal inverse CDF (Beasley-Springer-Moro, pure numpy, array-safe)."""
     p = np.asarray(p, dtype=float)
     p = np.clip(p, 1e-10, 1 - 1e-10)
 
-    a = np.array([-3.969683028665376e+01,  2.209460984245205e+02,
-                   -2.759285104469687e+02,  1.383577518672690e+02,
-                   -3.066479806614716e+01,  2.506628277459239e+00])
-    b = np.array([-5.447609879822406e+01,  1.615858368580409e+02,
-                   -1.556989798598866e+02,  6.680131188771972e+01,
-                   -1.328068155288572e+01])
-    c = np.array([-7.784894002430293e-03, -3.223964580411365e-01,
-                   -2.400758277161838e+00, -2.549732539343734e+00,
-                    4.374664141464968e+00,  2.938163982698783e+00])
-    d = np.array([ 7.784695709041462e-03,  3.224671290700398e-01,
-                    2.445134137142996e+00,  3.754408661907416e+00])
+    a = np.array(
+        [
+            -3.969683028665376e01,
+            2.209460984245205e02,
+            -2.759285104469687e02,
+            1.383577518672690e02,
+            -3.066479806614716e01,
+            2.506628277459239e00,
+        ]
+    )
+    b = np.array(
+        [
+            -5.447609879822406e01,
+            1.615858368580409e02,
+            -1.556989798598866e02,
+            6.680131188771972e01,
+            -1.328068155288572e01,
+        ]
+    )
+    c = np.array(
+        [
+            -7.784894002430293e-03,
+            -3.223964580411365e-01,
+            -2.400758277161838e00,
+            -2.549732539343734e00,
+            4.374664141464968e00,
+            2.938163982698783e00,
+        ]
+    )
+    d = np.array(
+        [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00, 3.754408661907416e00]
+    )
 
     p_low = 0.02425
     p_high = 1 - p_low
@@ -118,21 +141,26 @@ def _ndtri(p):
     mask = p < p_low
     if np.any(mask):
         q = np.sqrt(-2 * np.log(p[mask]))
-        x[mask] = (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
-                   ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+        x[mask] = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
 
     mask = (p >= p_low) & (p <= p_high)
     if np.any(mask):
         q = p[mask] - 0.5
         r = q * q
-        x[mask] = (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / \
-                   (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+        x[mask] = (
+            (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+            * q
+            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+        )
 
     mask = p > p_high
     if np.any(mask):
         q = np.sqrt(-2 * np.log(1 - p[mask]))
-        x[mask] = -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
-                    ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+        x[mask] = -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
 
     return x
 
@@ -155,9 +183,46 @@ def _t_cdf(x, df):
     return t_dist.cdf(x, df)
 
 
+def _nearest_psd_cholesky(
+    matrix: np.ndarray, epsilon: float = 1e-10
+) -> np.ndarray:
+    """Cholesky decomposition with nearest-PSD fallback.
+
+    If the input matrix is not positive-definite, applies an eigendecomposition
+    fix (clip eigenvalues to *epsilon*, reconstruct, normalize diagonal) and
+    retries.  If that also fails, falls back to the identity matrix (independent
+    draws) and emits a warning.
+
+    Returns the lower-triangular Cholesky factor *L*.
+    """
+    # Fast path — matrix is already PD
+    try:
+        return np.linalg.cholesky(matrix)
+    except np.linalg.LinAlgError:
+        pass
+
+    # Eigendecomposition fix
+    n = matrix.shape[0]
+    try:
+        eigvals, eigvecs = np.linalg.eigh(matrix)
+        eigvals = np.maximum(eigvals, epsilon)
+        fixed = eigvecs @ np.diag(eigvals) @ eigvecs.T
+        d = np.sqrt(np.diag(fixed))
+        d[d == 0] = 1.0  # guard against zero diagonal
+        fixed = fixed / np.outer(d, d)
+        return np.linalg.cholesky(fixed)
+    except np.linalg.LinAlgError:
+        logger.warning(
+            "Correlation matrix not PD after nearest-PSD fix; "
+            "falling back to independent draws (identity matrix)"
+        )
+        return np.eye(n)
+
+
 # ──────────────────────────────────────────────
 #  Distribution fitting
 # ──────────────────────────────────────────────
+
 
 def _wls_fit(z_scores: np.ndarray, values: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
     """Weighted least-squares: values = intercept + slope * z_scores."""
@@ -167,12 +232,21 @@ def _wls_fit(z_scores: np.ndarray, values: np.ndarray, weights: np.ndarray) -> t
     return float(beta[0]), float(beta[1])
 
 
-def fit_distribution_from_percentiles(percentiles: dict, dist_type: str = "normal") -> NormalDist | LogNormalDist:
+def fit_distribution_from_percentiles(
+    percentiles: dict,
+    dist_type: str = "normal",
+    direction: str = "higher_is_better",
+) -> NormalDist | LogNormalDist:
     """Fit a distribution from percentile points using weighted least-squares.
 
     percentiles: {p: val, ...} where p is percentile level (e.g. 10, 25, 50, 75, 90).
                  Accepts any number of points >= 2. More points = better fit.
     dist_type: "normal" or "lognormal"
+    direction: "higher_is_better" (default) or "lower_is_better".
+               For "lower_is_better" variables (e.g. credit_cost, NPL), the raw
+               percentiles are typically decreasing (P10=worst, P90=best). Setting
+               direction="lower_is_better" automatically reverses them so P10→best,
+               P90→worst, producing a strictly-increasing sequence for fitting.
 
     Uses inverse-variance weighted least squares over all provided percentiles.
     Central percentiles receive higher weight (they are estimated more precisely).
@@ -190,6 +264,11 @@ def fit_distribution_from_percentiles(percentiles: dict, dist_type: str = "norma
     levels = sorted(percentiles.keys())
     values = np.array([percentiles[p] for p in levels])
 
+    # ── Auto-reverse for lower_is_better variables ──
+    if direction == "lower_is_better":
+        # Raw: P10=worst(high), P90=best(low) → reverse so values are increasing
+        values = values[::-1]
+
     if dist_type == "lognormal" and np.any(values <= 0):
         neg_keys = [p for p in levels if percentiles[p] <= 0]
         raise ValueError(
@@ -201,8 +280,9 @@ def fit_distribution_from_percentiles(percentiles: dict, dist_type: str = "norma
         if not values[i] > values[i - 1]:
             raise ValueError(
                 f"Percentile values must be strictly increasing: "
-                f"P{levels[i-1]}={percentiles[levels[i-1]]} >= "
-                f"P{levels[i]}={percentiles[levels[i]]}"
+                f"P{levels[i - 1]}={float(values[i - 1]):.6f} >= "
+                f"P{levels[i]}={float(values[i]):.6f}"
+                f" (direction={direction})"
             )
     probs = np.array(levels, dtype=float) / 100.0
 
@@ -218,7 +298,7 @@ def fit_distribution_from_percentiles(percentiles: dict, dist_type: str = "norma
     z_scores = _ndtri(np.clip(probs, 1e-10, 1 - 1e-10))
 
     # Inverse-variance weights: central quantiles are estimated more precisely
-    weights = np.exp(-0.5 * z_scores ** 2)
+    weights = np.exp(-0.5 * z_scores**2)
     weights = weights / weights.sum()
 
     if dist_type == "lognormal":
@@ -241,6 +321,7 @@ def fit_distribution_from_percentiles(percentiles: dict, dist_type: str = "norma
 # ──────────────────────────────────────────────
 #  Correlation matrix with t-Copula support
 # ──────────────────────────────────────────────
+
 
 def build_correlation_matrix(assumptions: list, correlations: list) -> tuple:
     """Build correlation matrix from user-defined correlations.
@@ -265,7 +346,7 @@ def build_correlation_matrix(assumptions: list, correlations: list) -> tuple:
             f"Correlation matrix was not positive semi-definite "
             f"(min eigenvalue={min_eigval:.4f}). Applied eigendecomposition fix."
         )
-        eigvals = np.maximum(eigvals, 0)
+        eigvals = np.maximum(eigvals, 1e-10)
         corr = eigvecs @ np.diag(eigvals) @ eigvecs.T
         d = np.sqrt(np.diag(corr))
         corr = corr / np.outer(d, d)
@@ -277,7 +358,7 @@ def build_correlation_matrix(assumptions: list, correlations: list) -> tuple:
                 if abs(actual - target) > 0.05:
                     warnings.append(
                         f"corr({var_a}, {var_b}): requested={target:.2f}, "
-                        f"adjusted={actual:.2f} (delta={actual-target:+.2f})"
+                        f"adjusted={actual:.2f} (delta={actual - target:+.2f})"
                     )
 
     return corr, warnings
@@ -286,6 +367,7 @@ def build_correlation_matrix(assumptions: list, correlations: list) -> tuple:
 # ──────────────────────────────────────────────
 #  Monte Carlo simulation with t-Copula
 # ──────────────────────────────────────────────
+
 
 def run_monte_carlo(
     assumption_distributions: dict,
@@ -312,7 +394,7 @@ def run_monte_carlo(
     # Record seed BEFORE creating rng so it can reproduce the full run.
     # When seed=None, generate a fresh seed from OS entropy so the rng
     # created below starts from a known, recorded state.
-    actual_seed = seed if seed is not None else int(np.random.default_rng().integers(0, 2 ** 63))
+    actual_seed = seed if seed is not None else int(np.random.default_rng().integers(0, 2**63))
 
     rng = np.random.default_rng(actual_seed)
 
@@ -320,7 +402,7 @@ def run_monte_carlo(
     n_vars = len(names)
 
     if correlation_matrix is not None and correlation_matrix.shape == (n_vars, n_vars):
-        L = np.linalg.cholesky(correlation_matrix)
+        L = _nearest_psd_cholesky(correlation_matrix)
         z = rng.standard_normal((n_simulations, n_vars))
         correlated_z = z @ L.T
 
@@ -388,6 +470,7 @@ def run_monte_carlo(
 #  Multi-year cumulative simulation
 # ──────────────────────────────────────────────
 
+
 def _generate_samples(
     distributions: dict[str, NormalDist | LogNormalDist],
     names: list[str],
@@ -401,7 +484,7 @@ def _generate_samples(
     samples = np.zeros((n_simulations, n_vars))
 
     if correlation_matrix is not None and correlation_matrix.shape == (n_vars, n_vars):
-        L = np.linalg.cholesky(correlation_matrix)
+        L = _nearest_psd_cholesky(correlation_matrix)
         z = rng.standard_normal((n_simulations, n_vars))
         correlated_z = z @ L.T
 
@@ -474,7 +557,7 @@ def run_monte_carlo_cumulative(
     if n_simulations is None:
         n_simulations = MONTE_CARLO_SIMULATIONS
 
-    actual_seed = seed if seed is not None else int(np.random.default_rng().integers(0, 2 ** 63))
+    actual_seed = seed if seed is not None else int(np.random.default_rng().integers(0, 2**63))
 
     rng = np.random.default_rng(actual_seed)
 
@@ -485,8 +568,12 @@ def run_monte_carlo_cumulative(
         names = list(distributions.keys())
 
         samples = _generate_samples(
-            distributions, names, correlation_matrix,
-            n_simulations, copula_df, rng,
+            distributions,
+            names,
+            correlation_matrix,
+            n_simulations,
+            copula_df,
+            rng,
         )
 
         inputs = {name: samples[:, i] for i, name in enumerate(names)}
@@ -508,14 +595,20 @@ def run_monte_carlo_cumulative(
 #  RRR + Kelly Criterion
 # ──────────────────────────────────────────────
 
+
 def calc_rrr(price_distribution: np.ndarray, current_price: float) -> dict:
     """Calculate RRR and optimal position size via Kelly Criterion."""
     if price_distribution is None or len(price_distribution) == 0:
         return {
-            "rrr": 0.0, "p_up": 0.0, "p_down": 0.0,
-            "e_upside": 0.0, "e_downside": 0.0,
-            "kelly_full": 0.0, "kelly_half": 0.0,
-            "percentiles": {}, "current_price": current_price,
+            "rrr": 0.0,
+            "p_up": 0.0,
+            "p_down": 0.0,
+            "e_upside": 0.0,
+            "e_downside": 0.0,
+            "kelly_full": 0.0,
+            "kelly_half": 0.0,
+            "percentiles": {},
+            "current_price": current_price,
         }
 
     upside = price_distribution - current_price
@@ -558,8 +651,139 @@ def calc_rrr(price_distribution: np.ndarray, current_price: float) -> dict:
 
 
 # ──────────────────────────────────────────────
+#  RRR from percentile table (no raw arrays)
+# ──────────────────────────────────────────────
+
+
+def rrr_from_percentiles(
+    target_price_pctls: dict,
+    current_price: float,
+) -> dict:
+    """Compute RRR and Kelly from MC percentile table (no raw arrays needed).
+
+    Uses numerical integration in probability space over the quantile function
+    Q(p) reconstructed from the provided percentile points via linear
+    interpolation.
+
+    Useful when only the persisted percentile table is available (no raw
+    simulation arrays in memory), e.g. for report generation or entry-price
+    recalculation.
+
+    Args:
+        target_price_pctls: {percentile_level: target_price, ...}
+            e.g. {10: 4.77, 25: 5.41, 50: 6.28, 75: 7.35, 90: 8.47}
+            Keys are int/float percentile levels (1-99), values are prices.
+        current_price: Current market price (or entry price for recalc).
+
+    Returns:
+        dict with rrr, p_up, p_down, e_upside, e_downside,
+        kelly_full, kelly_half, current_price, source.
+    """
+    if not target_price_pctls or current_price <= 0:
+        return {
+            "rrr": 0.0,
+            "p_up": 0.0,
+            "p_down": 0.0,
+            "e_upside": 0.0,
+            "e_downside": 0.0,
+            "kelly_full": 0.0,
+            "kelly_half": 0.0,
+            "current_price": current_price,
+            "source": "percentile_integration",
+        }
+
+    # Sort percentile levels and values
+    levels = sorted(int(p) for p in target_price_pctls)
+    values = np.array([float(target_price_pctls[p]) for p in levels])
+    probs = np.array(levels, dtype=float) / 100.0  # convert to [0, 1]
+
+    # ── Find F(current_price): the CDF value at current_price ──
+    if current_price <= values[0]:
+        p_current = probs[0]
+    elif current_price >= values[-1]:
+        p_current = probs[-1]
+    else:
+        idx = int(np.searchsorted(values, current_price)) - 1
+        idx = max(0, min(idx, len(values) - 2))
+        frac = (current_price - values[idx]) / (values[idx + 1] - values[idx])
+        p_current = probs[idx] + frac * (probs[idx + 1] - probs[idx])
+
+    p_up = 1.0 - p_current
+    p_down = p_current
+
+    # ── Numerical integration via dense interpolation of Q(p) ──
+    n_interp = 200
+    p_grid = np.linspace(probs[0], probs[-1], n_interp)
+    v_grid = np.interp(p_grid, probs, values)
+
+    # Compute unconditional upside/downside integrals
+    upside = np.maximum(v_grid - current_price, 0.0)
+    downside = np.maximum(current_price - v_grid, 0.0)
+
+    # Trapezoidal integration over interior of percentile range
+    dp = np.diff(p_grid)
+    e_upside_interior = np.sum((upside[:-1] + upside[1:]) / 2 * dp)
+    e_downside_interior = np.sum((downside[:-1] + downside[1:]) / 2 * dp)
+
+    # Tail contributions (assume Q(p) = boundary value for tails)
+    e_upside_tail = max(float(values[-1]) - current_price, 0.0) * (1.0 - probs[-1])
+    e_downside_tail = max(current_price - float(values[0]), 0.0) * probs[0]
+
+    e_upside_raw = e_upside_interior + e_upside_tail
+    e_downside_raw = e_downside_interior + e_downside_tail
+
+    # ── Derive RRR and Kelly ──
+    if e_downside_raw > 1e-10 and p_down > 1e-10:
+        rrr = e_upside_raw / e_downside_raw
+        e_upside = e_upside_raw / p_up if p_up > 0 else 0.0
+        e_downside = e_downside_raw / p_down
+        b = e_upside / e_downside if e_downside > 0 else 0.0
+        kelly_full = max((p_up * b - p_down) / b, 0.0) if b > 0 else 0.0
+    else:
+        rrr = float("inf")
+        e_upside = e_upside_raw / p_up if p_up > 0 else 0.0
+        e_downside = 0.0
+        kelly_full = 1.0
+
+    kelly_half = kelly_full / 2
+
+    return {
+        "rrr": round(rrr, 4),
+        "p_up": round(p_up, 4),
+        "p_down": round(p_down, 4),
+        "e_upside": round(e_upside, 4),
+        "e_downside": round(e_downside, 4),
+        "kelly_full": round(kelly_full, 4),
+        "kelly_half": round(kelly_half, 4),
+        "current_price": current_price,
+        "source": "percentile_integration",
+    }
+
+
+def entry_price_rrr(
+    target_price_pctls: dict,
+    entry_price: float,
+) -> dict:
+    """Recalculate RRR at a different entry price.
+
+    The target price distribution (percentile table) is unchanged; only the
+    reference price shifts.  A lower entry price increases upside and
+    decreases downside, raising RRR.
+
+    Args:
+        target_price_pctls: MC percentile table (typically filtered).
+        entry_price: Hypothetical entry price.
+
+    Returns:
+        Same structure as rrr_from_percentiles().
+    """
+    return rrr_from_percentiles(target_price_pctls, entry_price)
+
+
+# ──────────────────────────────────────────────
 #  Assumption consistency guard
 # ──────────────────────────────────────────────
+
 
 def save_reviewed_assumptions(
     workspace_dir: str,
@@ -575,10 +799,13 @@ def save_reviewed_assumptions(
     ws.mkdir(parents=True, exist_ok=True)
     store = AtomicJSON(ws)
     lock_file = ws / "_reviewed_assumptions.json"
-    store.save("_reviewed_assumptions.json", {
-        "reviewed_at": pd.Timestamp.now().isoformat(),
-        "assumptions": assumptions,
-    })
+    store.save(
+        "_reviewed_assumptions.json",
+        {
+            "reviewed_at": pd.Timestamp.now().isoformat(),
+            "assumptions": assumptions,
+        },
+    )
     return lock_file
 
 
@@ -630,9 +857,7 @@ def verify_assumption_consistency(
         )
 
     for var_name in sorted(reviewed_vars - sim_vars):
-        violations.append(
-            f"Reviewed variable '{var_name}' is absent from Monte Carlo assumptions"
-        )
+        violations.append(f"Reviewed variable '{var_name}' is absent from Monte Carlo assumptions")
 
     percentile_map = {"p10": 0.10, "p50": 0.50, "p90": 0.90}
 
@@ -666,9 +891,7 @@ def verify_assumption_consistency(
     if correlation_matrix is not None:
         n = correlation_matrix.shape[0]
         if correlation_matrix.shape != (n, n):
-            violations.append(
-                f"Correlation matrix is not square: shape={correlation_matrix.shape}"
-            )
+            violations.append(f"Correlation matrix is not square: shape={correlation_matrix.shape}")
         else:
             # Symmetry
             if not np.allclose(correlation_matrix, correlation_matrix.T, atol=1e-8):
@@ -678,9 +901,7 @@ def verify_assumption_consistency(
             diag = np.diag(correlation_matrix)
             if not np.allclose(diag, 1.0, atol=1e-8):
                 bad = [(i, diag[i]) for i in range(n) if abs(diag[i] - 1.0) > 1e-8]
-                violations.append(
-                    f"Correlation matrix diagonal != 1.0 at: {bad}"
-                )
+                violations.append(f"Correlation matrix diagonal != 1.0 at: {bad}")
 
             # Off-diagonal in [-1, 1]
             off_diag = correlation_matrix[~np.eye(n, dtype=bool)]
@@ -707,13 +928,10 @@ def verify_assumption_consistency(
     # copula_df validation
     if copula_df is not None:
         if copula_df <= 2:
-            violations.append(
-                f"copula_df={copula_df} must be > 2 for valid t-Copula variance"
-            )
+            violations.append(f"copula_df={copula_df} must be > 2 for valid t-Copula variance")
         elif copula_df < 4:
             warnings.append(
-                f"copula_df={copula_df} is very low — very heavy tails, "
-                f"consider >= 4 for stability"
+                f"copula_df={copula_df} is very low — very heavy tails, consider >= 4 for stability"
             )
 
     # Simulation count sufficiency
@@ -760,6 +978,7 @@ def verify_assumption_consistency(
 # ──────────────────────────────────────────────
 #  Calibration tracking
 # ──────────────────────────────────────────────
+
 
 def save_calibration(
     workspace_dir: str,
@@ -858,8 +1077,12 @@ def _compute_calibration_stats(records: list) -> dict:
     return {
         "n_predictions": n,
         "mean_error_pct": f"{mean_err:+.1%}",
-        "bias": "optimistic" if mean_err > 0.05 else ("pessimistic" if mean_err < -0.05 else "neutral"),
-        "in_p30_p70_rate": f"{in_range_count}/{sum(1 for r in records if r.get('predicted_percentiles', {}).get(30))}" if has_range else "N/A",
+        "bias": "optimistic"
+        if mean_err > 0.05
+        else ("pessimistic" if mean_err < -0.05 else "neutral"),
+        "in_p30_p70_rate": f"{in_range_count}/{sum(1 for r in records if r.get('predicted_percentiles', {}).get(30))}"
+        if has_range
+        else "N/A",
         "suggestion": _calibration_suggestion(mean_err),
     }
 
@@ -892,3 +1115,101 @@ def load_calibration_stats() -> dict:
             continue
 
     return _compute_calibration_stats(all_completed)
+
+
+def validate_mc_p50_alignment(
+    mc_results: dict,
+    forecast_model: dict,
+    tolerance: float = 5.0,
+    primary_forward_year: str = "T+1",
+) -> dict:
+    """Compare Monte Carlo P50 outputs with forecast_model values.
+
+    Catches unit-convention bugs and model-function errors that produce
+    wildly wrong MC results (e.g. EPS 58.9 instead of 0.78).
+
+    Supports two input formats:
+    1. In-memory arrays: {"eps": np.array([...]), "bps": np.array([...]), ...}
+    2. Persisted JSON percentiles: {"eps_percentiles": {"50": 0.78}, ...}
+
+    Args:
+        mc_results: Monte Carlo output dict (arrays or JSON with percentile keys).
+        forecast_model: Parsed forecast_model.json dict.
+        tolerance: Max acceptable percent drift (default 5%).
+        primary_forward_year: Which period to compare (default "T+1").
+
+    Returns:
+        {"passed": bool, "checks": [...], "summary": str}
+        Each check: {"metric", "mc_p50", "forecast_p50", "pct_diff", "passed"}
+    """
+    period_data = forecast_model.get("periods", {}).get(primary_forward_year, {})
+
+    # Detect format: arrays (in-memory) vs percentiles (persisted JSON)
+    has_arrays = isinstance(mc_results.get("eps"), np.ndarray)
+    has_pctls = "eps_percentiles" in mc_results or "bps_percentiles" in mc_results
+
+    def _get_mc_p50(metric: str) -> float | None:
+        """Extract P50 for a metric from either format."""
+        if has_arrays and metric in mc_results:
+            return float(np.percentile(mc_results[metric], 50))
+        if has_pctls:
+            pctl_key = f"{metric}_percentiles"
+            pctls = mc_results.get(pctl_key, {})
+            p50 = pctls.get("50") or pctls.get(50)
+            if p50 is not None:
+                return float(p50)
+        return None
+
+    checks = []
+
+    # EPS
+    eps_forecast = period_data.get("eps")
+    eps_mc = _get_mc_p50("eps")
+    if eps_mc is not None and eps_forecast:
+        pct_diff = (eps_mc / eps_forecast - 1) * 100
+        checks.append(
+            {
+                "metric": "eps",
+                "mc_p50": round(eps_mc, 4),
+                "forecast_p50": round(eps_forecast, 4),
+                "pct_diff": round(pct_diff, 1),
+                "passed": abs(pct_diff) <= tolerance,
+            }
+        )
+
+    # BPS
+    bps_forecast = period_data.get("bps")
+    bps_mc = _get_mc_p50("bps")
+    if bps_mc is not None and bps_forecast:
+        pct_diff = (bps_mc / bps_forecast - 1) * 100
+        checks.append(
+            {
+                "metric": "bps",
+                "mc_p50": round(bps_mc, 4),
+                "forecast_p50": round(bps_forecast, 4),
+                "pct_diff": round(pct_diff, 1),
+                "passed": abs(pct_diff) <= tolerance,
+            }
+        )
+
+    # ROE (forecast stores as roe_pct or roe; MC stores as roe_percentiles)
+    roe_forecast = period_data.get("roe_pct", period_data.get("roe", 0))
+    roe_mc = _get_mc_p50("roe")
+    if roe_mc is not None and roe_forecast:
+        pct_diff = (roe_mc / roe_forecast - 1) * 100
+        checks.append(
+            {
+                "metric": "roe",
+                "mc_p50": round(roe_mc, 4),
+                "forecast_p50": round(roe_forecast, 4),
+                "pct_diff": round(pct_diff, 1),
+                "passed": abs(pct_diff) <= tolerance,
+            }
+        )
+
+    n_fail = sum(1 for c in checks if not c["passed"])
+    return {
+        "passed": n_fail == 0,
+        "checks": checks,
+        "summary": f"{len(checks)} checks, {n_fail} failed",
+    }

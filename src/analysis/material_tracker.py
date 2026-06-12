@@ -23,6 +23,7 @@ DOCUMENT_TYPES = {
     "company_announcement",
     "transcript",
     "presentation",
+    "api_source",
     "other",
 }
 
@@ -253,6 +254,54 @@ class MaterialTracker(WorkspaceStateBase):
             doc["read_status"] = normalized_status or "unknown"
 
         doc["updated_at"] = _today()
+        self._save()
+        return doc
+
+    def register_api_source(
+        self,
+        name: str,
+        api_name: str = "",
+        description: str = "",
+        data_types: list[str] | None = None,
+    ) -> dict:
+        """Register an API/data pipeline source (e.g. Tushare, AKShare fetch).
+
+        Unlike PDF documents, API sources are always "readable" — they
+        represent structured data already downloaded via CLI fetch or MCP.
+        This lets ``record_extraction`` reference them by ID when no PDF
+        document exists.
+
+        Returns the document record (new or existing).
+        """
+        # Deduplicate by name
+        for doc in self._data.get("documents", []):
+            if doc.get("doc_type") == "api_source" and doc.get("title") == name:
+                return doc
+
+        doc = {
+            "id": _id("DOC"),
+            "filename": f"api:{name}",
+            "doc_type": "api_source",
+            "title": name,
+            "issuer": api_name or name,
+            "publish_date": _today(),
+            "period": "",
+            "source_path": f"api://{name}",
+            "pages": None,
+            "language": "",
+            "notes": description,
+            "source_url": "",
+            "source_kind": "structured_api",
+            "is_complete_report": False,
+            "read_attempts": [],
+            "read_status": "api_success",
+            "fallback_required": False,
+            "fallback_resolved": False,
+            "data_types": data_types or [],
+            "created_at": _today(),
+            "updated_at": _today(),
+        }
+        self._data["documents"].append(doc)
         self._save()
         return doc
 
@@ -516,7 +565,14 @@ class MaterialTracker(WorkspaceStateBase):
             if not mda_exts:
                 fix_required.append("Annual/interim report indexed but no explicit MD&A/management-discussion extraction recorded")
         elif require_annual_mda and not annual_docs:
-            fix_required.append("No annual/interim report source indexed; add a workspace PDF or official complete annual/interim report URL and read MD&A")
+            # Check if API sources cover the required extraction types — if so,
+            # the PDF requirement can be relaxed (pure API research mode)
+            api_docs = [d for d in docs if d.get("doc_type") == "api_source"]
+            api_covers_all = bool(api_docs) and all(
+                by_type.get(t) for t in required
+            )
+            if not api_covers_all:
+                fix_required.append("No annual/interim report source indexed; add a workspace PDF or official complete annual/interim report URL and read MD&A")
 
         broker_docs = [d for d in docs if d.get("doc_type") == "broker_report"]
         if require_broker_assumptions and broker_docs and not by_type.get("broker_assumption"):

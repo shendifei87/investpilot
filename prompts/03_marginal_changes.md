@@ -140,7 +140,18 @@ Search and analyze changes in the past 1-3 months across these dimensions:
 
 ### 3.5 Edge Classification Scoring
 
-Classify and score the source of Edge for the expectation gap identified in this research:
+Classify and score the source of Edge for the expectation gap identified in this research.
+
+**Edge Type Definitions**:
+
+| Edge Type | Definition | Decay Speed |
+|:----------|:-----------|:------------|
+| Analytical | Deeper processing of public information | High (1–3 months) |
+| Temporal | Willingness to wait longer | None (self-controlled) |
+| Informational | Information not fully digested by the market | Very high (days–weeks) |
+| Structural | Market structure distortions (passive flows / forced selling) | Low (persistent) |
+
+Edge sustainability affects execution: low sustainability → prioritize speed; high sustainability → can wait for better entry.
 
 ```python
 from src.analysis.edge_scorer import EdgeScorer
@@ -231,6 +242,7 @@ After completing the expectation gap identification, answer these two core quest
 4. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{20天前}", end_date="{今天}")
    → 近 20 天日度资金流向（大单/中单/小单净额）
    → 趋势判断：大单持续流入 = 机构看多信号
+   ⚠️ **注意**: `moneyflow_dc` 在 2000 积分下可能返回权限错误 (code 40203)。如遇此情况，降级使用 `moneyflow` API（数据粒度较低但可用）
 
 5. （仅 A 股）mcp__tushareMcp__moneyflow_hsgt(start_date="{20天前}", end_date="{今天}")
    → 沪深港通北向资金整体流向
@@ -299,3 +311,20 @@ After completing the expectation gap identification, answer these two core quest
    - **A 股**：可使用全部 MCP API（2000 积分范围内）
    - **港股**：Tushare HK 模块未购买，使用 AKShare 替代。`stock_hk_daily(symbol, adjust="qfq")` 获取行情，`stock_hk_financial_indicator_em(symbol)` 获取财务指标（EPS/BPS/ROE/市值/股本），`stock_hk_valuation_comparison_em(symbol)` 获取同业估值对比。Tushare `moneyflow_hsgt`/`hk_hold` 仍可用于南向资金。
    - **美股**：Tushare US 模块未购买，使用 AKShare `stock_us_daily(symbol)` 获取行情，`macro_usa_*()` 获取宏观指标。财务报表需通过 WebSearch + SEC EDGAR + `financial-analysis` skills 获取。
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**

@@ -18,11 +18,18 @@ logger = logging.getLogger(__name__)
 def cmd_detect(args):
     market = detect_market(args.ticker)
     normalized, market = normalize_ticker(args.ticker, market)
-    print(json.dumps({
+    result = {
         "ticker": args.ticker,
         "normalized": normalized,
         "market": market,
-    }, indent=2))
+    }
+    if getattr(args, "create_workspace", False):
+        ws_dir = WORKSPACES_DIR / normalized.replace(".", "_")
+        ws_dir.mkdir(parents=True, exist_ok=True)
+        result["workspace"] = str(ws_dir)
+        result["workspace_created"] = ws_dir.exists()
+        print(f"Workspace ready: {ws_dir}")
+    print(json.dumps(result, indent=2))
 
 
 def cmd_fetch(args):
@@ -455,6 +462,89 @@ def cmd_step4_template(args):
     print(json.dumps(template, ensure_ascii=False, indent=2))
 
 
+def cmd_sync_reviewed(args):
+    """Auto-generate _reviewed_assumptions.json skeleton from step4_structured_assumptions.json.
+
+    Extracts p50 and evidence from each assumption_matrix variable so the analyst
+    only needs to fill in confidence / risk / verdict.
+    """
+    import json
+
+    ws_path = _resolve_workspace(args.workspace)
+    structured_path = ws_path / "step4_structured_assumptions.json"
+    reviewed_path = ws_path / "_reviewed_assumptions.json"
+
+    if not structured_path.exists():
+        print(f"Error: {structured_path} not found")
+        sys.exit(1)
+
+    with open(structured_path, encoding="utf-8") as f:
+        structured = json.load(f)
+
+    # Load existing reviewed file to preserve hand-written entries
+    existing: dict = {}
+    if reviewed_path.exists():
+        with open(reviewed_path, encoding="utf-8") as f:
+            existing = json.load(f)
+
+    # Normalize assumption_matrix to list of rows
+    raw_matrix = structured.get("assumption_matrix", [])
+    if isinstance(raw_matrix, dict):
+        rows = []
+        for _period, variables in raw_matrix.items():
+            if not isinstance(variables, dict):
+                continue
+            for var_name, pct_dict in variables.items():
+                if not isinstance(pct_dict, dict):
+                    continue
+                row = dict(pct_dict)
+                row["variable"] = var_name
+                rows.append(row)
+    else:
+        rows = raw_matrix
+
+    existing_assumptions = existing.get("assumptions", {})
+    added = []
+
+    for row in rows:
+        label = row.get("variable", "")
+        if not label:
+            continue
+        if label in existing_assumptions:
+            continue  # preserve hand-written entry
+
+        p50 = row.get("p50")
+        evidence_ids = row.get("evidence_ids", [])
+        evidence_str = ", ".join(str(e) for e in evidence_ids) if isinstance(evidence_ids, list) else str(evidence_ids)
+
+        existing_assumptions[label] = {
+            "p50": p50,
+            "confidence": "medium",
+            "evidence": evidence_str,
+            "risk": "TODO: fill in key risk",
+            "verdict": "pending",
+        }
+        added.append(label)
+
+    output = {
+        "reviewed_at": existing.get("reviewed_at", ""),
+        "reviewer": existing.get("reviewer", "analyst"),
+        "status": "pending_user_review",
+        "valuation_mode": existing.get("valuation_mode", ""),
+        "assumptions": existing_assumptions,
+    }
+
+    with open(reviewed_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    print(f"Synced {len(added)} new variables into {reviewed_path.name}")
+    if added:
+        print(f"Added: {', '.join(added)}")
+    existing_count = len(existing_assumptions) - len(added)
+    if existing_count > 0:
+        print(f"Preserved {existing_count} existing entries")
+
+
 def cmd_validate_step4(args):
     """Validate Step 4 assumptions before model build or Monte Carlo."""
     from src.analysis.step4_validate import validate_step4_with_guard
@@ -482,6 +572,22 @@ def cmd_validate_materials(args):
         require_annual_mda=not args.no_annual_mda,
         require_broker_assumptions=args.require_broker,
     )
+
+    # --no-pdf-tolerance: when set, tolerate missing PDF report requirement
+    # as long as extraction types are covered (pure API/MCP research mode)
+    if args.no_pdf_tolerance and not result.get("passed"):
+        blockers = result.get("fix_required", [])
+        pdf_blockers = [b for b in blockers if "annual/interim report" in b.lower() or "md&a" in b.lower()]
+        non_pdf_blockers = [b for b in blockers if b not in pdf_blockers]
+        if not non_pdf_blockers:
+            result["passed"] = True
+            result["fix_required"] = []
+            result["warnings"] = result.get("warnings", []) + [
+                "PDF tolerance mode: annual/interim report requirement waived "
+                "(extraction types covered by API/MCP data)"
+            ]
+            result["summary"] = "Material coverage sufficient (no-PDF tolerance)"
+
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     if not result.get("passed"):
         sys.exit(1)
@@ -513,11 +619,31 @@ def cmd_model(args):
 
 
 def cmd_excel_model(args):
-    """Generate professional three-statement Excel model from forecast_model.json."""
-    from src.analysis.excel_model import generate_excel_model
+    """Generate professional three-statement Excel model from forecast_model.json.
 
+    Automatically routes to bank Excel model if forecast_model.json has
+    model_type == "bank_nim_driven". Standard companies use excel_model.py.
+    """
     ws_path = _resolve_workspace(args.workspace)
 
+    # Detect bank model via forecast_model.json → model_type
+    forecast_path = ws_path / "forecast_model.json"
+    if forecast_path.exists():
+        try:
+            forecast = json.loads(forecast_path.read_text(encoding="utf-8"))
+            if forecast.get("model_type") == "bank_nim_driven":
+                from src.analysis.bank_excel_model import build_bank_excel
+                ticker = args.ticker or forecast.get("ticker", "").replace(".SH", "").replace(".SZ", "")
+                output_path = build_bank_excel(ws_path, ticker)
+                print(json.dumps({
+                    "excel_path": str(output_path),
+                    "model_type": "bank_nim_driven",
+                }, ensure_ascii=False, indent=2))
+                return
+        except (json.JSONDecodeError, KeyError):
+            pass  # fall through to standard model
+
+    from src.analysis.excel_model import generate_excel_model
     output_path = generate_excel_model(ws_path, ticker=args.ticker or "")
     print(json.dumps({
         "excel_path": str(output_path),
@@ -714,9 +840,19 @@ def _auto_calculate_valuation(results, output_dir):
                 fallback_warnings.append("PE trailing calculated from raw eps_ttm input fallback.")
 
         bvps = _float_or_none(val_data.get("book_value_per_share"))
+        minority_per_share = _float_or_none(val_data.get("minority_interest_per_share"))
         if price_f is not None and bvps is not None and not _valid_metric(calculated.get("pb"), "pb"):
+            # For banks/financials, BPS may include minority interest — deduct if available
+            if minority_per_share and minority_per_share > 0:
+                bvps_attributable = bvps - minority_per_share
+                fallback_warnings.append(
+                    f"BPS adjusted: {bvps:.4f} - minority {minority_per_share:.4f} = {bvps_attributable:.4f}"
+                )
+                bvps = bvps_attributable
             pb_res = calc_pb(price_f, bvps, label="MRQ raw input")
             pb_res["input_source"] = "valuation_raw_inputs.book_value_per_share"
+            if minority_per_share and minority_per_share > 0:
+                pb_res["equity_basis"] = "attributable_equity_excluding_minority"
             calculated["pb"] = pb_res
             if pb_res.get("valid"):
                 fallback_warnings.append("PB calculated from raw book_value_per_share input fallback.")
@@ -877,12 +1013,18 @@ def cmd_comps(args):
 
     try:
         result = run_comps(ws_path)
-        print("✅ Comps generated successfully:")
+        mode = result.get("mode", "PE")
+        is_bank = mode == "bank_PB"
+        metric_label = "PB" if is_bank else "PE"
+        metric_key = "pb" if is_bank else "pe"
+        print(f"✅ Comps generated successfully ({'🏦 Bank ' if is_bank else ''}{metric_label} mode):")
         print(f"   XLSX:    {result['xlsx']}")
         print(f"   Summary: {result['summary_md']}")
         print(f"   Benchmark: {result['benchmark']}")
-        if result["target_pe"] is not None:
-            print(f"   Target PE: {result['target_pe']}x | Peer Median: {result['peer_median_pe']}x")
+        target_val = result.get(f"target_{metric_key}")
+        median_val = result.get(f"peer_median_{metric_key}")
+        if target_val is not None:
+            print(f"   Target {metric_label}: {target_val}x | Peer Median: {median_val}x")
             if result["premium_pct"] is not None:
                 direction = "premium" if result["premium_pct"] > 0 else "discount"
                 print(f"   Target {direction}: {abs(result['premium_pct']):.1f}% vs peer median")
@@ -1318,6 +1460,7 @@ def main():
 
     p_detect = subparsers.add_parser("detect", help="Detect market from ticker")
     p_detect.add_argument("ticker")
+    p_detect.add_argument("--create-workspace", action="store_true", help="Create workspace directory if it doesn't exist")
     p_detect.set_defaults(func=cmd_detect)
 
     p_fetch = subparsers.add_parser("fetch", help="Fetch stock data")
@@ -1477,6 +1620,13 @@ def main():
     )
     p_step4_template.set_defaults(func=cmd_step4_template)
 
+    p_sync_reviewed = subparsers.add_parser(
+        "sync-reviewed",
+        help="Sync _reviewed_assumptions.json from step4_structured_assumptions.json",
+    )
+    p_sync_reviewed.add_argument("workspace", help="Workspace directory name or path")
+    p_sync_reviewed.set_defaults(func=cmd_sync_reviewed)
+
     p_validate_step4 = subparsers.add_parser(
         "validate-step4",
         help="Validate Step 4 structured assumptions before Monte Carlo",
@@ -1493,6 +1643,7 @@ def main():
     p_validate_materials.add_argument("--required", help="Comma-separated required extraction types")
     p_validate_materials.add_argument("--no-annual-mda", action="store_true", help="Do not require annual/interim MD&A coverage")
     p_validate_materials.add_argument("--require-broker", action="store_true", help="Require broker_assumption if broker PDFs are indexed")
+    p_validate_materials.add_argument("--no-pdf-tolerance", action="store_true", help="Tolerate missing PDF if extraction types covered (pure API research)")
     p_validate_materials.set_defaults(func=cmd_validate_materials)
 
     p_model = subparsers.add_parser("model", help="Generate forecast_model.json/html from Step 4 assumptions")

@@ -13,11 +13,14 @@ import pandas as pd
 
 from src.report._html_templates import STEP_CONFIG
 from src.report.generator import (
+    _IMAGE_STEP_MAP,
     _auto_embed_workspace_images,
     _embed_image_as_base64,
     _extract_summary_metrics,
+    _pct_val,
     _read_json_safe,
     generate_distribution_chart,
+    generate_histogram_from_percentiles,
     generate_pe_band_chart,
     generate_report_html,
     md_to_html,
@@ -26,6 +29,7 @@ from src.report.generator import (
 # ---------------------------------------------------------------------------
 # md_to_html
 # ---------------------------------------------------------------------------
+
 
 class TestMdToHtml:
     def test_headings(self):
@@ -64,7 +68,11 @@ class TestMdToHtml:
         md = "# Step Title\n## Real heading"
         html = md_to_html(md)
         # H1 should be skipped; only H2+ converted
-        assert "Step Title" not in html or "<h2>" not in html.split("Step Title")[0] if "Step Title" in html else True
+        assert (
+            "Step Title" not in html or "<h2>" not in html.split("Step Title")[0]
+            if "Step Title" in html
+            else True
+        )
 
     def test_image_base64_embedding(self):
         """Image references should be resolved and embedded as base64."""
@@ -73,6 +81,7 @@ class TestMdToHtml:
             # Create a minimal 1x1 PNG
             import struct
             import zlib
+
             def _make_png():
                 header = b"\x89PNG\r\n\x1a\n"
                 ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
@@ -117,6 +126,7 @@ class TestMdToHtml:
 # generate_distribution_chart
 # ---------------------------------------------------------------------------
 
+
 class TestGenerateDistributionChart:
     def test_produces_png(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,8 +155,132 @@ class TestGenerateDistributionChart:
 
 
 # ---------------------------------------------------------------------------
-# generate_pe_band_chart
+# generate_histogram_from_percentiles & _pct_val
 # ---------------------------------------------------------------------------
+
+
+class TestGenerateHistogramFromPercentiles:
+    """Tests for the Pop Mart style histogram chart."""
+
+    def test_single_scenario_produces_png(self):
+        """Bank model (single-year) should produce a valid PNG."""
+        scenarios = [
+            {
+                "label": "T+1 (PB×BPS)",
+                "percentiles": {
+                    "5": 3.80,
+                    "10": 4.20,
+                    "25": 4.80,
+                    "50": 5.50,
+                    "75": 6.30,
+                    "90": 7.10,
+                    "95": 7.60,
+                },
+                "current_price": 5.08,
+                "n_simulations": 100000,
+                "subtitle": "100,000 simulations\nFiltered: ROE ≥ 7.0% & NPL ≤ 1.1%",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "distribution_chart.png"
+            result = generate_histogram_from_percentiles(
+                scenarios=scenarios,
+                title="Test Bank Distribution",
+                save_path=out,
+                currency="CNY",
+                n_samples=10000,
+            )
+            assert Path(result).exists()
+            assert Path(result).suffix == ".png"
+            assert Path(result).stat().st_size > 1000  # real PNG, not stub
+
+    def test_multi_scenario_side_by_side(self):
+        """Multi-year (Pop Mart style) should produce a single PNG with panels."""
+        scenarios = [
+            {
+                "label": "FY2026E",
+                "percentiles": {
+                    "p5": 40.0,
+                    "p10": 45.0,
+                    "p25": 55.0,
+                    "p50": 65.0,
+                    "p75": 75.0,
+                    "p90": 85.0,
+                    "p95": 90.0,
+                },
+                "current_price": 60.0,
+                "n_simulations": 100000,
+                "subtitle": "100,000 simulations",
+            },
+            {
+                "label": "FY2027E",
+                "percentiles": {
+                    "5": 50.0,
+                    "10": 55.0,
+                    "25": 65.0,
+                    "50": 78.0,
+                    "75": 90.0,
+                    "90": 100.0,
+                    "95": 108.0,
+                },
+                "current_price": 60.0,
+                "n_simulations": 100000,
+                "subtitle": "100,000 simulations",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "distribution_chart.png"
+            result = generate_histogram_from_percentiles(
+                scenarios=scenarios,
+                title="Test Multi-Year Distribution",
+                save_path=out,
+                currency="HKD",
+                n_samples=10000,
+            )
+            assert Path(result).exists()
+            assert Path(result).stat().st_size > 1000
+
+    def test_empty_scenarios_returns_empty(self):
+        """Empty scenario list should not crash."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "distribution_chart.png"
+            result = generate_histogram_from_percentiles(
+                scenarios=[],
+                title="Empty Test",
+                save_path=out,
+            )
+            # Should return empty string or path without creating file
+            assert not Path(out).exists() or result == ""
+
+
+class TestPctVal:
+    """Tests for _pct_val helper."""
+
+    def test_integer_key(self):
+        assert _pct_val({"10": 4.5, "50": 5.0}, 10) == 4.5
+
+    def test_string_key(self):
+        assert _pct_val({"10": 4.5, "50": 5.0}, 50) == 5.0
+
+    def test_p_prefix_key(self):
+        assert _pct_val({"p10": 4.5, "p50": 5.0}, 10) == 4.5
+
+    def test_missing_key_returns_none(self):
+        assert _pct_val({"10": 4.5}, 99) is None
+
+
+class TestImageStepMap:
+    """Verify _IMAGE_STEP_MAP has correct mappings."""
+
+    def test_distribution_chart_maps_to_step6(self):
+        assert _IMAGE_STEP_MAP.get("distribution_chart.png") == "step6"
+
+    def test_monte_carlo_distribution_maps_to_step6(self):
+        assert _IMAGE_STEP_MAP.get("monte_carlo_distribution.png") == "step6"
+
+    def test_forward_pe_band_maps_to_step6(self):
+        assert _IMAGE_STEP_MAP.get("forward_pe_band.png") == "step6"
+
 
 class TestGeneratePeBandChart:
     def _sample_pe_band(self):
@@ -182,6 +316,7 @@ class TestGeneratePeBandChart:
 # generate_report_html
 # ---------------------------------------------------------------------------
 
+
 class TestGenerateReportHtml:
     def test_step0_configured_before_core_steps(self):
         assert STEP_CONFIG[0]["key"] == "step0"
@@ -192,8 +327,7 @@ class TestGenerateReportHtml:
             ws = Path(tmp) / "TEST"
             ws.mkdir()
             (ws / "step0_quick_triage.md").write_text(
-                "# Step 0: Quick Triage - TEST\n\n"
-                "**Decision: FULL_RESEARCH**\n",
+                "# Step 0: Quick Triage - TEST\n\n**Decision: FULL_RESEARCH**\n",
                 encoding="utf-8",
             )
             (ws / "step1_business_analysis.md").write_text(
@@ -211,6 +345,7 @@ class TestGenerateReportHtml:
 # ---------------------------------------------------------------------------
 # _extract_summary_metrics
 # ---------------------------------------------------------------------------
+
 
 class TestExtractSummaryMetrics:
     def _create_workspace(self, tmp):
@@ -230,26 +365,27 @@ class TestExtractSummaryMetrics:
 
         # Step 7 with RRR
         (ws / "step7_rrr_strategy.md").write_text(
-            "## RRR Assessment\n"
-            "**RRR = 2.5** (based on T+2 Forward)\n"
+            "## RRR Assessment\n**RRR = 2.5** (based on T+2 Forward)\n"
         )
 
         # Step 2 with moat
-        (ws / "step2_competitive_moat.md").write_text(
-            "### Moat Rating\n"
-            "Wide, Widening\n"
-        )
+        (ws / "step2_competitive_moat.md").write_text("### Moat Rating\nWide, Widening\n")
 
         # Edge score JSON
-        (ws / "edge_score.json").write_text(json.dumps([{
-            "composite": 6.5,
-            "composite_grade": "B — Meaningful edge",
-        }]))
+        (ws / "edge_score.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "composite": 6.5,
+                        "composite_grade": "B — Meaningful edge",
+                    }
+                ]
+            )
+        )
 
         # Step 9 with decision
         (ws / "step9_research_director_review.md").write_text(
-            "## Investment Committee\n"
-            "**Decision: Buy**\n"
+            "## Investment Committee\n**Decision: Buy**\n"
         )
 
         return ws
@@ -279,11 +415,15 @@ class TestExtractSummaryMetrics:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "SUMMARY_OVERRIDE"
             ws.mkdir()
-            (ws / "summary_metrics.json").write_text(json.dumps({
-                "current_price": "10.00",
-                "target_price": "15.00",
-                "rrr": "2.20",
-            }))
+            (ws / "summary_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": "10.00",
+                        "target_price": "15.00",
+                        "rrr": "2.20",
+                    }
+                )
+            )
             (ws / "step6_monte_carlo_simulation.md").write_text(
                 "当前股价：999.00\n| P50 目标价 | 888.00 |\n"
             )
@@ -297,8 +437,7 @@ class TestExtractSummaryMetrics:
             ws = Path(tmp) / "P50_UNLABELED"
             ws.mkdir()
             (ws / "step6_monte_carlo_simulation.md").write_text(
-                "当前股价：100.00\n"
-                "| **P50** | **2.50** |\n"  # EPS-like row, not target price
+                "当前股价：100.00\n| **P50** | **2.50** |\n"  # EPS-like row, not target price
             )
             metrics = _extract_summary_metrics(str(ws), "P50_UNLABELED")
             assert metrics["current_price"] == "100.00"
@@ -308,9 +447,7 @@ class TestExtractSummaryMetrics:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "PE_TEST"
             ws.mkdir()
-            (ws / "step6_monte_carlo_simulation.md").write_text(
-                "Forward PE: 25.5x\n当前股价：100"
-            )
+            (ws / "step6_monte_carlo_simulation.md").write_text("Forward PE: 25.5x\n当前股价：100")
             metrics = _extract_summary_metrics(str(ws), "PE_TEST")
             assert metrics.get("forward_pe") is not None
 
@@ -318,10 +455,14 @@ class TestExtractSummaryMetrics:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "PE_CALC"
             ws.mkdir()
-            (ws / "calculated_valuation.json").write_text(json.dumps({
-                "source": "calculated",
-                "pe_forward": {"pe": 18.25, "valid": True},
-            }))
+            (ws / "calculated_valuation.json").write_text(
+                json.dumps(
+                    {
+                        "source": "calculated",
+                        "pe_forward": {"pe": 18.25, "valid": True},
+                    }
+                )
+            )
             metrics = _extract_summary_metrics(str(ws), "PE_CALC")
             assert metrics["forward_pe"] == "18.2x"
 
@@ -330,10 +471,12 @@ class TestExtractSummaryMetrics:
 # JSON-first metric extraction (new tests)
 # ---------------------------------------------------------------------------
 
+
 def _make_minimal_png():
     """Create a minimal valid 1x1 PNG."""
     import struct
     import zlib
+
     header = b"\x89PNG\r\n\x1a\n"
     ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
     ihdr_crc = struct.pack(">I", zlib.crc32(b"IHDR" + ihdr) & 0xFFFFFFFF)
@@ -356,53 +499,79 @@ class TestJsonFirstExtraction:
 
         if schema == "A":
             # Schema A (600707-style): p50_target, current_price, rrr at top level
-            (ws / "monte_carlo_results.json").write_text(json.dumps({
-                "current_price": 9.88,
-                "p50_target": 8.34,
-                "rrr": 1.53,
-                "kelly_f": 0.149,
-                "kelly_half": 0.074,
-                "kelly_after_edge": 0.037,
-                "p50_eps": 0.387,
-                "upside_prob": 0.43,
-                "downside_prob": 0.57,
-            }))
+            (ws / "monte_carlo_results.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": 9.88,
+                        "p50_target": 8.34,
+                        "rrr": 1.53,
+                        "kelly_f": 0.149,
+                        "kelly_half": 0.074,
+                        "kelly_after_edge": 0.037,
+                        "p50_eps": 0.387,
+                        "upside_prob": 0.43,
+                        "downside_prob": 0.57,
+                    }
+                )
+            )
         elif schema == "B":
             # Schema B (600036-style): target_price_percentiles
-            (ws / "monte_carlo_results.json").write_text(json.dumps({
-                "current_price": 35.0,
-                "target_price_percentiles": {"50": 42.0, "10": 25.0, "90": 55.0},
-                "mean_target_price": 41.5,
-            }))
+            (ws / "monte_carlo_results.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": 35.0,
+                        "target_price_percentiles": {"50": 42.0, "10": 25.0, "90": 55.0},
+                        "mean_target_price": 41.5,
+                    }
+                )
+            )
         elif schema == "C":
             # Schema C (09992-style): target_price dict, no current_price
-            (ws / "monte_carlo_results.json").write_text(json.dumps({
-                "target_price": {"50": 8.5, "10": 4.0, "90": 15.0},
-                "rrr": 2.1,
-                "kelly_half_pct": 5.0,
-            }))
+            (ws / "monte_carlo_results.json").write_text(
+                json.dumps(
+                    {
+                        "target_price": {"50": 8.5, "10": 4.0, "90": 15.0},
+                        "rrr": 2.1,
+                        "kelly_half_pct": 5.0,
+                    }
+                )
+            )
         elif schema == "D":
             # Schema D (300685-style): singular filename, nested rrr
-            (ws / "monte_carlo_result.json").write_text(json.dumps({
-                "current_price": 50.0,
-                "target_price_percentiles": {"50": 65.0},
-                "rrr": {"rrr": 1.8, "kelly_half": 6.0},
-            }))
+            (ws / "monte_carlo_result.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": 50.0,
+                        "target_price_percentiles": {"50": 65.0},
+                        "rrr": {"rrr": 1.8, "kelly_half": 6.0},
+                    }
+                )
+            )
 
         # pe_band_data.json
-        (ws / "pe_band_data.json").write_text(json.dumps({
-            "current_forward_pe": 25.5,
-            "current_percentile": 98.0,
-            "forward_eps": 0.387,
-            "bands": {"p10": 6.8, "p25": 10.2, "p50": 16.5, "p75": 22.1, "p90": 28.5},
-        }))
+        (ws / "pe_band_data.json").write_text(
+            json.dumps(
+                {
+                    "current_forward_pe": 25.5,
+                    "current_percentile": 98.0,
+                    "forward_eps": 0.387,
+                    "bands": {"p10": 6.8, "p25": 10.2, "p50": 16.5, "p75": 22.1, "p90": 28.5},
+                }
+            )
+        )
 
         # edge_score.json (list format)
-        (ws / "edge_score.json").write_text(json.dumps([{
-            "raw_scores": {"analytical": 6, "informational": 4},
-            "composite": 5.55,
-            "composite_grade": "B — Meaningful edge",
-        }]))
+        (ws / "edge_score.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "raw_scores": {"analytical": 6, "informational": 4},
+                        "composite": 5.55,
+                        "composite_grade": "B — Meaningful edge",
+                    }
+                ]
+            )
+        )
 
         # Minimal step files (for moat/decision only)
         (ws / "step2_competitive_moat.md").write_text("Narrow Moat, Widening\n")
@@ -419,10 +588,10 @@ class TestJsonFirstExtraction:
                 "当前股价：999.00\nForward PE: 99.0x\n"
             )
             metrics = _extract_summary_metrics(str(ws), "JSON_TEST")
-            assert metrics["current_price"] == "9.88"   # from JSON, not 999
-            assert metrics["target_price"] == "8.34"     # from JSON p50_target
-            assert metrics["rrr"] == "1.53"              # from JSON rrr
-            assert metrics["forward_pe"] == "25.5x"      # from pe_band_data.json
+            assert metrics["current_price"] == "9.88"  # from JSON, not 999
+            assert metrics["target_price"] == "8.34"  # from JSON p50_target
+            assert metrics["rrr"] == "1.53"  # from JSON rrr
+            assert metrics["forward_pe"] == "25.5x"  # from pe_band_data.json
 
     def test_schema_b_target_price_percentiles(self):
         """Schema B: target_price_percentiles.50."""
@@ -471,16 +640,30 @@ class TestJsonFirstExtraction:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "PE_PRIORITY"
             ws.mkdir()
-            (ws / "monte_carlo_results.json").write_text(json.dumps({
-                "current_price": 10.0, "p50_target": 12.0, "rrr": 2.0,
-            }))
-            (ws / "calculated_valuation.json").write_text(json.dumps({
-                "pe_trailing": {"pe": 50.0, "price": 10.0},
-            }))
-            (ws / "pe_band_data.json").write_text(json.dumps({
-                "current_forward_pe": 22.5,
-                "current_percentile": 75.0,
-            }))
+            (ws / "monte_carlo_results.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": 10.0,
+                        "p50_target": 12.0,
+                        "rrr": 2.0,
+                    }
+                )
+            )
+            (ws / "calculated_valuation.json").write_text(
+                json.dumps(
+                    {
+                        "pe_trailing": {"pe": 50.0, "price": 10.0},
+                    }
+                )
+            )
+            (ws / "pe_band_data.json").write_text(
+                json.dumps(
+                    {
+                        "current_forward_pe": 22.5,
+                        "current_percentile": 75.0,
+                    }
+                )
+            )
             (ws / "step2_competitive_moat.md").write_text("")
             (ws / "step9_research_director_review.md").write_text("")
 
@@ -492,13 +675,23 @@ class TestJsonFirstExtraction:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "EDGE_FB"
             ws.mkdir()
-            (ws / "monte_carlo_results.json").write_text(json.dumps({
-                "current_price": 5.0, "p50_target": 7.0, "rrr": 1.5,
-            }))
-            (ws / "thesis.json").write_text(json.dumps({
-                "edge_score": 7.0,
-                "edge_grade": "A",
-            }))
+            (ws / "monte_carlo_results.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": 5.0,
+                        "p50_target": 7.0,
+                        "rrr": 1.5,
+                    }
+                )
+            )
+            (ws / "thesis.json").write_text(
+                json.dumps(
+                    {
+                        "edge_score": 7.0,
+                        "edge_grade": "A",
+                    }
+                )
+            )
             (ws / "step2_competitive_moat.md").write_text("")
             (ws / "step9_research_director_review.md").write_text("")
 
@@ -511,15 +704,25 @@ class TestJsonFirstExtraction:
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp) / "EDGE_HIST"
             ws.mkdir()
-            (ws / "monte_carlo_results.json").write_text(json.dumps({
-                "current_price": 5.0, "p50_target": 7.0, "rrr": 1.5,
-            }))
-            (ws / "thesis.json").write_text(json.dumps({
-                "history": [
-                    {"edge_score": 5.0, "edge_grade": "C"},
-                    {"edge_score": 6.5, "edge_grade": "B"},
-                ]
-            }))
+            (ws / "monte_carlo_results.json").write_text(
+                json.dumps(
+                    {
+                        "current_price": 5.0,
+                        "p50_target": 7.0,
+                        "rrr": 1.5,
+                    }
+                )
+            )
+            (ws / "thesis.json").write_text(
+                json.dumps(
+                    {
+                        "history": [
+                            {"edge_score": 5.0, "edge_grade": "C"},
+                            {"edge_score": 6.5, "edge_grade": "B"},
+                        ]
+                    }
+                )
+            )
             (ws / "step2_competitive_moat.md").write_text("")
             (ws / "step9_research_director_review.md").write_text("")
 
@@ -563,7 +766,7 @@ class TestAutoEmbedImages:
                 '<div id="step6" class="section-card">'
                 '<div class="section-header"><h2>Step 6</h2></div>'
                 '<div class="section-body"><p>Some content</p>'
-                '<!-- AUTO_IMAGES:step6 --></div></div>'
+                "<!-- AUTO_IMAGES:step6 --></div></div>"
             )
 
             result = _auto_embed_workspace_images(ws, sections_html)
@@ -581,8 +784,8 @@ class TestAutoEmbedImages:
             sections_html = (
                 '<div id="step6" class="section-card">'
                 '<div class="section-body">'
-                '<p>monte_carlo_distribution already here</p>'
-                '</div></div>'
+                "<p>monte_carlo_distribution already here</p>"
+                "</div></div>"
             )
 
             result = _auto_embed_workspace_images(ws, sections_html)
@@ -596,7 +799,9 @@ class TestAutoEmbedImages:
             png_data = _make_minimal_png()
             (ws / "monte_carlo_distribution.png").write_bytes(png_data)
 
-            body = md_to_html("![Distribution](monte_carlo_distribution.png)", workspace_dir=str(ws))
+            body = md_to_html(
+                "![Distribution](monte_carlo_distribution.png)", workspace_dir=str(ws)
+            )
             sections_html = (
                 '<div id="step6" class="section-card">'
                 '<div class="section-header"><h2>Step 6</h2></div>'
@@ -651,6 +856,7 @@ class TestAutoEmbedImages:
 # Regression: nested-dict format support (09992.HK bug fix)
 # ---------------------------------------------------------------------------
 
+
 class TestNestedDictFormat:
     """Tests for nested-dict assumption_matrix / segment_revenues format.
 
@@ -664,80 +870,108 @@ class TestNestedDictFormat:
         ws.mkdir()
 
         # step4_structured_assumptions.json — nested dict format
-        (ws / "step4_structured_assumptions.json").write_text(json.dumps({
-            "ticker": "09992.HK",
-            "base_year": "FY2025",
-            "forward_year": "T1",
-            "hkd_cny": 0.92,
-            "shares_outstanding": 1331723150,
-            "current_price_hkd": 176.4,
-            "current_price_cny": 162.29,
-            "base_revenue_cny_m": 37120,
-            "financial_model_inputs": {
-                "p50_target_hkd": 248.5,
-                "p50_eps_cny": 11.43,
-                "shares_outstanding": 1331723150,
-                "diluted_shares": 1331723150,
-                "hkd_cny": 0.92,
-                "cash": 5000,
-                "debt": 1000,
-                "equity": 22000,
-                "nwc_ratio": 0.10,
-                "ppe_ratio": 0.20,
-                "other_assets_ratio": 0.05,
-                "ap_ratio": 0.06,
-                "dividend_payout": 0.0,
-                "da_ratio": 0.04,
-                "capex_ratio": 0.06,
-                "interest_rate_on_debt": 0.00,
-                "interest_rate_on_cash": 0.00,
-                "annual_share_dilution_pct": 0.0,
-            },
-            "assumption_matrix": {
-                "T1_FY2026E": {
-                    "revenue_growth": {"p10": 0.08, "p30": 0.15, "p50": 0.22, "p70": 0.30, "p90": 0.40},
-                    "gross_margin": {"p10": 0.55, "p50": 0.65, "p90": 0.75},
-                    "opex_ratio": {"p10": 0.10, "p50": 0.18, "p90": 0.25},
-                    "tax_rate": {"p10": 0.10, "p50": 0.15, "p90": 0.20},
-                    "pe_multiple": {"p10": 15, "p30": 18, "p50": 22, "p70": 28, "p90": 35},
-                    "overseas_growth": {"p10": 0.20, "p30": 0.30, "p50": 0.45, "p70": 0.60, "p90": 0.80},
-                },
-                "T2_FY2027E": {
-                    "revenue_growth": {"p10": 0.05, "p30": 0.12, "p50": 0.18, "p70": 0.25, "p90": 0.35},
-                    "gross_margin": {"p50": 0.64},
-                    "opex_ratio": {"p50": 0.17},
-                    "tax_rate": {"p50": 0.15},
-                    "pe_multiple": {"p10": 13, "p30": 16, "p50": 20, "p70": 26, "p90": 32},
-                },
-                "T3_FY2028E": {
-                    "revenue_growth": {"p10": 0.03, "p30": 0.08, "p50": 0.12, "p70": 0.18, "p90": 0.25},
-                    "gross_margin": {"p50": 0.63},
-                    "opex_ratio": {"p50": 0.16},
-                    "tax_rate": {"p50": 0.15},
-                    "pe_multiple": {"p10": 12, "p30": 15, "p50": 18, "p70": 24, "p90": 30},
-                },
-            },
-            "segment_revenues": {
-                "product_level": {
-                    "Plush": {"base": 15000, "p50": 18300, "p50_growth": 0.22},
-                    "Figurines": {"base": 10000, "p50": 12000, "p50_growth": 0.20},
-                    "MEGA": {"base": 8000, "p50": 11000, "p50_growth": 0.375},
-                    "Derivatives": {"base": 4120, "p50": 5000, "p50_growth": 0.213},
+        (ws / "step4_structured_assumptions.json").write_text(
+            json.dumps(
+                {
+                    "ticker": "09992.HK",
+                    "base_year": "FY2025",
+                    "forward_year": "T1",
+                    "hkd_cny": 0.92,
+                    "shares_outstanding": 1331723150,
+                    "current_price_hkd": 176.4,
+                    "current_price_cny": 162.29,
+                    "base_revenue_cny_m": 37120,
+                    "financial_model_inputs": {
+                        "p50_target_hkd": 248.5,
+                        "p50_eps_cny": 11.43,
+                        "shares_outstanding": 1331723150,
+                        "diluted_shares": 1331723150,
+                        "hkd_cny": 0.92,
+                        "cash": 5000,
+                        "debt": 1000,
+                        "equity": 22000,
+                        "nwc_ratio": 0.10,
+                        "ppe_ratio": 0.20,
+                        "other_assets_ratio": 0.05,
+                        "ap_ratio": 0.06,
+                        "dividend_payout": 0.0,
+                        "da_ratio": 0.04,
+                        "capex_ratio": 0.06,
+                        "interest_rate_on_debt": 0.00,
+                        "interest_rate_on_cash": 0.00,
+                        "annual_share_dilution_pct": 0.0,
+                    },
+                    "assumption_matrix": {
+                        "T1_FY2026E": {
+                            "revenue_growth": {
+                                "p10": 0.08,
+                                "p30": 0.15,
+                                "p50": 0.22,
+                                "p70": 0.30,
+                                "p90": 0.40,
+                            },
+                            "gross_margin": {"p10": 0.55, "p50": 0.65, "p90": 0.75},
+                            "opex_ratio": {"p10": 0.10, "p50": 0.18, "p90": 0.25},
+                            "tax_rate": {"p10": 0.10, "p50": 0.15, "p90": 0.20},
+                            "pe_multiple": {"p10": 15, "p30": 18, "p50": 22, "p70": 28, "p90": 35},
+                            "overseas_growth": {
+                                "p10": 0.20,
+                                "p30": 0.30,
+                                "p50": 0.45,
+                                "p70": 0.60,
+                                "p90": 0.80,
+                            },
+                        },
+                        "T2_FY2027E": {
+                            "revenue_growth": {
+                                "p10": 0.05,
+                                "p30": 0.12,
+                                "p50": 0.18,
+                                "p70": 0.25,
+                                "p90": 0.35,
+                            },
+                            "gross_margin": {"p50": 0.64},
+                            "opex_ratio": {"p50": 0.17},
+                            "tax_rate": {"p50": 0.15},
+                            "pe_multiple": {"p10": 13, "p30": 16, "p50": 20, "p70": 26, "p90": 32},
+                        },
+                        "T3_FY2028E": {
+                            "revenue_growth": {
+                                "p10": 0.03,
+                                "p30": 0.08,
+                                "p50": 0.12,
+                                "p70": 0.18,
+                                "p90": 0.25,
+                            },
+                            "gross_margin": {"p50": 0.63},
+                            "opex_ratio": {"p50": 0.16},
+                            "tax_rate": {"p50": 0.15},
+                            "pe_multiple": {"p10": 12, "p30": 15, "p50": 18, "p70": 24, "p90": 30},
+                        },
+                    },
+                    "segment_revenues": {
+                        "product_level": {
+                            "Plush": {"base": 15000, "p50": 18300, "p50_growth": 0.22},
+                            "Figurines": {"base": 10000, "p50": 12000, "p50_growth": 0.20},
+                            "MEGA": {"base": 8000, "p50": 11000, "p50_growth": 0.375},
+                            "Derivatives": {"base": 4120, "p50": 5000, "p50_growth": 0.213},
+                        }
+                    },
+                    "valuation_source": "all self-calculated from raw financial data",
+                    "assumption_consistency": {
+                        "revenue_vs_segments": "consistent",
+                    },
+                    "bridge_analysis": {
+                        "base_total": 37120,
+                        "p50_total": 46300,
+                        "delta": 9180,
+                    },
+                    "growth_drivers": [],
+                    "margin_derivation": {"method": "historical_average"},
+                    "contrarian_checks": [],
                 }
-            },
-            "valuation_source": "all self-calculated from raw financial data",
-            "assumption_consistency": {
-                "revenue_vs_segments": "consistent",
-            },
-            "bridge_analysis": {
-                "base_total": 37120,
-                "p50_total": 46300,
-                "delta": 9180,
-            },
-            "growth_drivers": [],
-            "margin_derivation": {"method": "historical_average"},
-            "contrarian_checks": [],
-        }))
+            )
+        )
 
         # Step 6 markdown with a line that used to confuse regex, plus Step 4 for validation.
         step4_content = (
@@ -750,21 +984,25 @@ class TestNestedDictFormat:
         )
         (ws / "step6_monte_carlo_simulation.md").write_text(step4_content)
         (ws / "step4_assumption_research.md").write_text(step4_content)
-        (ws / "_reviewed_assumptions.json").write_text(json.dumps({
-            "reviewed_at": "2026-01-01",
-            "assumptions": {
-                "rev_growth": {"p10": 0.08, "p50": 0.22, "p90": 0.40},
-                "gross_margin": {"p10": 0.55, "p50": 0.65, "p90": 0.75},
-                "opex_ratio": {"p10": 0.10, "p50": 0.18, "p90": 0.25},
-                "tax_rate": {"p10": 0.10, "p50": 0.15, "p90": 0.20},
-                "pe": {"p10": 15, "p50": 22, "p90": 35},
-            },
-        }), encoding="utf-8")
+        (ws / "_reviewed_assumptions.json").write_text(
+            json.dumps(
+                {
+                    "reviewed_at": "2026-01-01",
+                    "assumptions": {
+                        "rev_growth": {"p10": 0.08, "p50": 0.22, "p90": 0.40},
+                        "gross_margin": {"p10": 0.55, "p50": 0.65, "p90": 0.75},
+                        "opex_ratio": {"p10": 0.10, "p50": 0.18, "p90": 0.25},
+                        "tax_rate": {"p10": 0.10, "p50": 0.15, "p90": 0.20},
+                        "pe": {"p10": 15, "p50": 22, "p90": 35},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         # Step 7
         (ws / "step7_rrr_strategy.md").write_text(
-            "## RRR Assessment\n**RRR = 3.2**\n"
-            "P50 Target | 248.5 HKD\n"
+            "## RRR Assessment\n**RRR = 3.2**\nP50 Target | 248.5 HKD\n"
         )
 
         # Step 2
@@ -846,8 +1084,9 @@ class TestNestedDictFormat:
             ws = self._create_09992_workspace(tmp)
             result = validate_step4(str(ws / "step4_assumption_research.md"))
             # Find the valuation_ratios_calculated check
-            val_checks = [c for c in result["checks"]
-                          if c["check"] == "valuation_ratios_calculated"]
+            val_checks = [
+                c for c in result["checks"] if c["check"] == "valuation_ratios_calculated"
+            ]
             assert len(val_checks) == 1
             assert val_checks[0]["status"] == "PASS"
 
@@ -857,35 +1096,58 @@ class TestNestedDictFormat:
             ws = Path(tmp) / "CHART"
             ws.mkdir()
             (ws / "step1_business_analysis.md").write_text("# Step 1: CHART\n", encoding="utf-8")
-            (ws / "step4_structured_assumptions.json").write_text(json.dumps({
-                "base_revenue_cny_m": 10000,
-                "current_price_hkd": 100,
-                "financial_model_inputs": {
-                    "shares_outstanding": 100000000,
-                    "diluted_shares": 100000000,
-                    "hkd_cny": 1.0,
-                    "cash": 5000,
-                    "debt": 1000,
-                    "equity": 22000,
-                    "nwc_ratio": 0.10,
-                    "ppe_ratio": 0.20,
-                    "other_assets_ratio": 0.05,
-                    "ap_ratio": 0.06,
-                    "dividend_payout": 0.0,
-                    "da_ratio": 0.04,
-                    "capex_ratio": 0.06,
-                    "interest_rate_on_debt": 0.00,
-                    "interest_rate_on_cash": 0.00,
-                    "annual_share_dilution_pct": 0.0,
-                },
-                "assumption_matrix": {
-                    "T1_FY2026E": {
-                        "revenue_growth": {"p10": 0.05, "p30": 0.10, "p50": 0.15, "p70": 0.20, "p90": 0.25},
-                        "npm": {"p10": 0.10, "p30": 0.12, "p50": 0.15, "p70": 0.18, "p90": 0.20},
-                        "pe_multiple": {"p10": 10, "p30": 12, "p50": 15, "p70": 18, "p90": 22},
-                    },
-                },
-            }), encoding="utf-8")
+            (ws / "step4_structured_assumptions.json").write_text(
+                json.dumps(
+                    {
+                        "base_revenue_cny_m": 10000,
+                        "current_price_hkd": 100,
+                        "financial_model_inputs": {
+                            "shares_outstanding": 100000000,
+                            "diluted_shares": 100000000,
+                            "hkd_cny": 1.0,
+                            "cash": 5000,
+                            "debt": 1000,
+                            "equity": 22000,
+                            "nwc_ratio": 0.10,
+                            "ppe_ratio": 0.20,
+                            "other_assets_ratio": 0.05,
+                            "ap_ratio": 0.06,
+                            "dividend_payout": 0.0,
+                            "da_ratio": 0.04,
+                            "capex_ratio": 0.06,
+                            "interest_rate_on_debt": 0.00,
+                            "interest_rate_on_cash": 0.00,
+                            "annual_share_dilution_pct": 0.0,
+                        },
+                        "assumption_matrix": {
+                            "T1_FY2026E": {
+                                "revenue_growth": {
+                                    "p10": 0.05,
+                                    "p30": 0.10,
+                                    "p50": 0.15,
+                                    "p70": 0.20,
+                                    "p90": 0.25,
+                                },
+                                "npm": {
+                                    "p10": 0.10,
+                                    "p30": 0.12,
+                                    "p50": 0.15,
+                                    "p70": 0.18,
+                                    "p90": 0.20,
+                                },
+                                "pe_multiple": {
+                                    "p10": 10,
+                                    "p30": 12,
+                                    "p50": 15,
+                                    "p70": 18,
+                                    "p90": 22,
+                                },
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             generate_report_html(ws, ticker="CHART")
 
@@ -916,9 +1178,7 @@ class TestHtmlReportIntegrity:
             "| P50 Target | 150.00 |\n"
         )
         # Step 7
-        (ws / "step7_rrr_strategy.md").write_text(
-            "## RRR Assessment\n**RRR = 2.5**\n"
-        )
+        (ws / "step7_rrr_strategy.md").write_text("## RRR Assessment\n**RRR = 2.5**\n")
         # Step 2
         (ws / "step2_competitive_moat.md").write_text("Wide Moat\n")
         # Step 9
@@ -970,8 +1230,7 @@ class TestHtmlReportIntegrity:
             if cp > 0 and tp > 0:
                 ratio = tp / cp
                 assert 0.2 <= ratio <= 10.0, (
-                    f"Target/Current ratio {ratio:.2f} is suspicious — "
-                    f"target={tp}, current={cp}"
+                    f"Target/Current ratio {ratio:.2f} is suspicious — target={tp}, current={cp}"
                 )
 
     def test_report_summary_card_has_key_metrics(self):
@@ -982,4 +1241,4 @@ class TestHtmlReportIntegrity:
             html = Path(path).read_text(encoding="utf-8")
 
             assert "100.00" in html  # current price
-            assert "Buy" in html     # decision
+            assert "Buy" in html  # decision

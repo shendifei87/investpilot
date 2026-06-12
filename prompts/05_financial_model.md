@@ -256,6 +256,182 @@ Skill("financial-analysis:dcf-model", args="{ticker} DCF 交叉验证，使用 S
    - Gap > 20%: **flag as material divergence** — document which method you trust more and why; consider blocking Step 5 if unresolvable
 3. **No circularity**: DCF result does NOT override Step 4 assumptions. It informs Step 7 RRR by providing an absolute valuation anchor
 
+## Phase 4: Bank-Specific Model (Bank Stocks Only)
+
+When the research target is a **bank** (identified by `detect` market category or Step 1 classification), use the NIM-driven earnings model instead of the standard EPS = Revenue × Margin framework.
+
+### Why Banks Are Different
+
+Standard models break for banks because:
+- Revenue = Net Interest Income + Non-Interest Income, not "units × price"
+- Margin = NIM (Net Interest Margin), not gross margin
+- Capital adequacy (CAR) constrains balance sheet growth
+- Credit cost is the primary earnings volatility driver
+- DDM (Dividend Discount Model) replaces DCF as the auxiliary valuation
+
+### Bank Model Engine
+
+```python
+from src.analysis.bank_financial_model import (
+    project_bank_earnings,
+    ddm_valuation,
+    save_bank_model,
+    BANK_MODEL_INPUTS,
+)
+```
+
+**Inputs** (all from Step 4 assumptions):
+
+| Input | Description | Typical Source |
+|:------|:------------|:---------------|
+| `earning_assets` | 生息资产 (beginning) | Balance sheet |
+| `total_loans` | 客户贷款总额 | Balance sheet |
+| `shareholders_equity` | 归属母公司股东权益 | Balance sheet (deducted minority) |
+| `shares_outstanding` | 总股本 | Share data |
+| `nim` | 净息差 (decimal, e.g. 0.0166) | Income statement / NII ÷ earning assets |
+| `fee_income_ratio` | 非息收入占比 | Income statement |
+| `cost_to_income_ratio` | 成本收入比 (%) | Income statement |
+| `credit_cost_rate` | 信用成本率 (bps) | Provision ÷ avg loans |
+| `earning_assets_growth` | 生息资产增速 (%) | Step 4 assumption |
+| `nim_change_bp` | NIM 变动 (bp/year) | Step 4 assumption |
+| `loan_growth` | 贷款增速 (%) | Step 4 assumption |
+| `dividend_payout_ratio` | 分红比率 (%) | Dividend policy |
+| `tax_rate` | 有效税率 (%) | Income statement |
+
+**Per-period overrides**: Any growth/assumption input can be a list `[T+1, T+2, T+3]` instead of a scalar.
+
+### Bank Model Outputs
+
+```python
+model = project_bank_earnings(inputs, periods=3)
+# model["periods"] — list of T+1/T+2/T+3 projections (EPS, BPS, ROE, NIM, DPS)
+# model["sensitivity"]["nim_sensitivity"] — EPS under NIM ±10bp
+# model["sensitivity"]["credit_cost_sensitivity"] — EPS under credit cost ±10bp
+```
+
+### DDM Valuation (Bank Auxiliary)
+
+DDM replaces DCF for bank stocks. Use `ddm_valuation()`:
+
+```python
+ddm = ddm_valuation(
+    dps_t1=0.25,           # Expected DPS in T+1
+    growth_rate=3.0,       # Dividend growth rate %
+    required_return=8.0,   # Required return % (cost of equity)
+    terminal_growth=2.0,   # Terminal growth % (default: growth - 1%)
+)
+# Returns: intrinsic_value_gordon, intrinsic_value_2stage, validity
+```
+
+**DDM parameters from Step 4**:
+- `dps_t1`: from bank model projection (EPS × payout ratio)
+- `growth_rate`: long-term sustainable earnings growth (usually 2-4% for large banks)
+- `required_return`: COE from CAPM or dividend yield + growth
+- `terminal_growth`: long-run GDP nominal growth (1.5-2.5%)
+
+### Bank Model Output Files
+
+Save to workspace:
+- `{ticker}_bank_model.json` — machine-readable, feeds Step 6 Monte Carlo
+- `step5_bank_model_summary.md` — narrative explanation
+
+### Bank Excel Model (`step5_3statement_model.xlsx`)
+
+Bank stocks use a separate Excel generator (`src/analysis/bank_excel_model.py`) that produces a 6-tab workbook. The CLI auto-detects bank models via `forecast_model.json` → `model_type: "bank_nim_driven"` and routes to `build_bank_excel()`.
+
+**Column layout**: Col A = labels, Col B = FY(n-1)A, Col C = FY(n)A (base), Col D/E/F = T+1/T+2/T+3. Historical values in black, projections in blue.
+
+#### Tab 1: NII Build
+Purpose: Decompose Net Interest Income into earning assets × NIM.
+
+| Row | Content | Source |
+|:----|:--------|:-------|
+| 生息资产 (平均) | Earning assets by year | Bank model `earning_assets` |
+| YoY 增速 (%) | Growth rate per year | Step 4 `earning_assets_growth` |
+| 净息差 NIM (%) | NIM path with bp changes | Bank model `nim_pct` |
+| 净利息收入 NII | EA × NIM | Bank model `net_interest_income` |
+| 非利息收入 | Fee + other income | Bank model `non_interest_income` |
+| **营业收入合计** | NII + Non-NII | Bank model `total_operating_income` |
+
+#### Tab 2: Income Statement
+Purpose: Full P&L from operating income to EPS/BPS/ROE.
+
+| Row | Content | Format |
+|:----|:--------|:-------|
+| 净利息收入 / 非利息收入 / 营业收入合计 | Revenue lines | 亿元 |
+| 营业支出 | OpEx = CTI × revenue | 亿元 |
+| 信用减值损失 | Credit cost = avg loans × CC rate | 亿元 |
+| 利润总额 / 净利润 | PBT / Net profit | 亿元 |
+| EPS / BPS / ROE / DPS | Per-share metrics | 元 / % |
+| 利润率分析 | NIM, ROE, CTI by year | % |
+
+#### Tab 3: Balance Sheet
+Purpose: Assets, liabilities, equity projection with balance check.
+
+| Section | Key Items |
+|:--------|:----------|
+| 资产 | 现金及存放央行, 客户贷款, 金融投资, 存放同业, 其他 |
+| 负债 | 客户存款, 同业存放, 应付债券 |
+| 权益 | 归母权益, 少数股东权益 |
+| **平衡检查** | 资产 − 负债 − 权益 = 0 (mandatory) |
+
+#### Tab 4: Key Ratios
+Purpose: Track all banking KPIs and kill switches.
+
+| Ratio | Kill Switch / Threshold |
+|:------|:------------------------|
+| NIM (%) | Monitor decline >10bp |
+| ROE (%) | Kill if < 7.0% |
+| 成本收入比 (%) | Monitor reversal above 55% |
+| 信用成本率 (%) | Monitor spike above 0.80% |
+| NPL (%) | **Kill if > 1.1%** |
+| 拨备覆盖率 (%) | Monitor below 280% |
+| CAR (%) | Target ≥ 13.5% |
+| 分红比率 (%) | Stable at 30% |
+
+#### Tab 5: Valuation Bridge
+Purpose: Multi-method target price comparison.
+
+| Section | Methods |
+|:--------|:--------|
+| PB × BPS (Primary) | BPS × PB(P50) → target price, upside % |
+| DDM (Auxiliary) | Gordon Growth model, 2-Stage DDM, upside % |
+| PE (Reference only) | PE × EPS for reference (NOT primary for banks) |
+
+#### Tab 6: Assumptions & Checks
+Purpose: Step 4 assumption lock + model integrity verification.
+
+| Section | Content |
+|:--------|:--------|
+| Assumptions lock | All P50 values traced to Step 4, with source tags |
+| Integrity checks | EPS/BPS/ROE vs Step 4 bridge, NIM path, credit cost |
+| Kill switch status | NPL and ROE thresholds with current values |
+
+**Auto-generation**: When `save_bank_model()` is called, it auto-generates `forecast_model.html` from `forecast_model.json`. The CLI `cmd_excel_model()` detects `model_type == "bank_nim_driven"` and routes to `build_bank_excel()` automatically.
+
+### Bank Valuation Framework (Hard Rule)
+
+For banks, the valuation hierarchy is:
+
+| Priority | Method | Purpose |
+|:---------|:-------|:--------|
+| **Primary** | PB × BPS | Relative valuation anchor |
+| **Secondary** | PB/ROE regression | Cross-sectional comparison with peers |
+| **Auxiliary** | DDM | Absolute valuation cross-check |
+| **Not used** | DCF (FCF) | FCF is meaningless for banks |
+| **Not used** | EV/EBITDA | EBITDA doesn't exist for banks |
+
+All PB calculations must use `calc_pb` with `deduct_minority=True` — banks often have significant minority interests from subsidiaries.
+
+### Bank Monte Carlo (Step 6 Adaptation)
+
+When the target is a bank, Step 6 Monte Carlo uses:
+- **PB distribution** (lognormal) instead of PE
+- **ROE distribution** (normal) as the key driver
+- **NIM distribution** (normal) for sensitivity
+- **Credit cost distribution** (normal) for tail risk
+- Correlation structure: t-Copula with copula_df=6
+
 ## Output Format
 
 Write `step5_financial_model.md` with the following sections:
@@ -286,3 +462,24 @@ End with:
 > Under what model-linkage or accounting conditions would the Step 4 assumptions fail to produce the claimed EPS?
 
 List formula, accounting, and reconciliation risks. If any risk is material, return to Step 4 or block Step 5.
+
+---
+
+## MCP 参数限制
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**

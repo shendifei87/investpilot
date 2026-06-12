@@ -30,7 +30,7 @@ python -m src.cli workflow {workspace_dir} block --step 9 --reason "unresolved a
 
 - All Step 1-8 analysis outputs
 - Forward PE Band chart and data (`forward_pe_band.png`)
-- Edge Score (`edge_score.json`)
+- Edge Score (`edge_scores.json`)
 - Thesis Tracker (`thesis.json`) — core thesis, hypotheses, catalysts, Kill Switches
 - Calibration Record (`calibration_record.json`) — historical prediction calibration
 
@@ -169,13 +169,16 @@ assert decay['total_catalysts'] > 0, 'No catalysts initialized'
 print('✅ catalysts.json valid —', decay['total_catalysts'], 'catalysts,', decay['pending_catalysts'], 'pending')
 "
 
-# 3. 验证 edge_score.json 是 EdgeScorer 格式（历史列表）
+# 3. 验证 edge_scores.json 是 EdgeScorer 格式（注意文件名是 edge_scores.json，复数）
 python -c "
 from src.analysis.edge_scorer import EdgeScorer
 latest = EdgeScorer.load_latest('{workspace_dir}')
 assert latest is not None, 'Edge score not initialized via EdgeScorer'
-assert 'composite' in latest, 'Edge score missing composite'
-print('✅ edge_score.json valid — composite:', latest['composite'], ', grade:', latest['composite_grade'])
+comp = latest.get('composite', {})
+weighted = comp.get('weighted_score') if isinstance(comp, dict) else latest.get('composite')
+assert weighted is not None, 'Edge score missing composite'
+grade = comp.get('grade', '') if isinstance(comp, dict) else ''
+print('✅ edge_scores.json valid — composite:', weighted, ', grade:', grade)
 "
 ```
 
@@ -190,35 +193,42 @@ from src.analysis.edge_scorer import EdgeScorer
 from src.analysis.knowledge_graph import KnowledgeGraph
 
 # 1. Initialize Thesis
+#    Note: create() NOT create_thesis(). kill_switches passed here, not add_kill_switch.
 tracker = ThesisTracker(workspace_dir)
 tracker.create(
     core_thesis="...",           # From Step 3 core expectation gap
     hold_period_months=12,
-    edge_type="...",
-    edge_score=...,              # From Step 3.5 edge scoring
+    edge_type="...",             # e.g. "analytical"
     kill_switches=["..."],       # From Step 7 stop-loss conditions
 )
 
 # 2. Add key hypotheses (from Step 1-6)
+#    Note: add_hypothesis() NOT add_hypotheses()
 tracker.add_hypothesis("...", catalyst_date="...", impact="high")
 # Each hypothesis must be a verifiable judgment
 
 # 3. Initialize Catalyst Tracker
+#    Note: add_catalyst(event, expected_date, impact, direction)
+#    Note: add_kill_switch(condition, severity="critical")
 cat_tracker = CatalystTracker(workspace_dir)
 for event in step3_catalysts:
     cat_tracker.add_catalyst(event["name"], event["date"], impact=event["impact"])
 for ks in step7_kill_switches:
     cat_tracker.add_kill_switch(ks)
 
-# 4. Initialize Edge Scorer (persists to edge_score.json as history list)
+# 4. Initialize Edge Scorer (persists to edge_scores.json as history list)
+#    Note: file is edge_scores.json (plural), NOT edge_score.json
+#    Note: arguments are keyword-only, in analytical/temporal/informational/structural order
 scorer = EdgeScorer(workspace_dir)
 scores = scorer.score(
-    analytical=..., informational=..., temporal=..., structural=...,
+    analytical=..., temporal=..., informational=..., structural=...,
     analytical_reason="...",
     temporal_reason="...",
     informational_reason="...",
     structural_reason="...",
 )
+# scores["composite"] is a float (weighted composite score, e.g. 5.25)
+# scores["composite_grade"] is a string: "C — Marginal edge, thesis is largely consensus"
 
 # 5. Record to Knowledge Graph
 kg = KnowledgeGraph()
@@ -231,7 +241,7 @@ kg.record_research(
     rrr=rrr_value,
     moat_rating=moat,
     edge_composite=scores["composite"],
-    eqc_grade=eqc_grade,
+    eqc_grade=scores["composite_grade"],
 )
 ```
 
@@ -325,6 +335,7 @@ kg.add_lesson("...", context="...", tickers=["..."])
 
 2. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{5天前}", end_date="{今天}")
    → 最近 5 天资金流向（判断市场是否已开始反映 catalyst）
+   ⚠️ **注意**: `moneyflow_dc` 在 2000 积分下可能返回权限错误 (code 40203)。如遇此情况，降级使用 `moneyflow` API（数据粒度较低但可用）
 
 3. financial-analysis:pptx-author（可选，Step 9 完成后）
    → 生成 IC (Investment Committee) 演示文稿
@@ -339,3 +350,20 @@ kg.add_lesson("...", context="...", tickers=["..."])
 3. 市场适配：
    - **港股**：使用 AKShare `stock_hk_spot_em()` 获取最新价格快照。Tushare `moneyflow_dc` 不覆盖港股，资金流向用 `moneyflow_hsgt`（南向资金）。
    - **美股**：使用 AKShare `stock_us_spot_em()` 获取最新价格（15min 延迟）。无实时资金流向，可用 WebSearch 获取市场情绪。
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**

@@ -88,6 +88,11 @@ _BALANCE_ALIASES = {
     "Bonds Payable": ("应付债券", "bond_payable"),
     "Current Portion of Long Term Debt": ("一年内到期的非流动负债", "non_cur_liab_due_1y", "current_portion_debt"),
     "Inventory": ("存货",),
+    "Minority Interest": (
+        "少数股东权益", "minority_int", "minority_interest",
+        # HK terminology
+        "非控股权益", "非控制性权益",
+    ),
     "Accounts Payable": (
         "应付账款",
         # HK terminology
@@ -864,16 +869,23 @@ def calc_pb_from_statements(
     price: float,
     balance: pd.DataFrame,
     shares: float,
+    deduct_minority: bool = True,
 ) -> dict:
     """Calculate PB from balance sheet data.
+
+    For banks and financials, book value should use equity attributable
+    to the parent company (excluding minority interest). When
+    deduct_minority=True (default), minority interest is subtracted
+    from total equity to get attributable equity.
 
     Args:
         price: Current stock price.
         balance: Balance sheet DataFrame.
         shares: Shares outstanding.
+        deduct_minority: If True, subtract minority interest from equity.
 
     Returns:
-        dict from calc_pb.
+        dict from calc_pb with equity basis annotation.
     """
     equity = _get_series(balance, "Total Stockholder Equity", _BALANCE_ALIASES.get("Total Stockholder Equity", ()))
     if equity is None or equity.dropna().empty:
@@ -883,10 +895,25 @@ def calc_pb_from_statements(
     if shares is None or shares <= 0:
         return {"pb": None, "valid": False, "error": f"Shares outstanding invalid: {shares}"}
 
+    equity_basis = "total_equity_including_minority"
+
+    # Deduct minority interest to get equity attributable to parent
+    if deduct_minority:
+        minority = _get_series(
+            balance, "Minority Interest",
+            _BALANCE_ALIASES.get("Minority Interest", ()),
+        )
+        if minority is not None and not minority.dropna().empty:
+            latest_minority = float(minority.dropna().iloc[-1])
+            if latest_minority > 0:
+                latest_equity -= latest_minority
+                equity_basis = "attributable_equity_excluding_minority"
+
     bvps = latest_equity / shares
     result = calc_pb(price, bvps, label="MRQ")
     result["total_equity"] = latest_equity
     result["shares"] = shares
+    result["equity_basis"] = equity_basis
     return result
 
 

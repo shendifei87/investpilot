@@ -159,7 +159,7 @@ python -m src.cli comps {workspace}
 1. Peer list from competitive landscape (2.3) feeds into `step2_comps_data.json` as the peer universe
 2. All PE ratios are self-calculated by the CLI using `calc_pe()` — no manual PE entry
 3. Statistical benchmarks (peer median/mean) set the **valuation corridor** that flows into:
-   - Step 2 "Moat → Valuation Constraint" PE Reasonable Ceiling
+   - Step 2 "Moat → Valuation Constraint" (PE or PB depending on mode)
    - Step 4 assumption ranges
    - Step 5 valuation sheet peer column
 4. If the company trades at a premium to median, the premium must be justified by moat rating (2.1) or growth differential (2.5) — otherwise flag as **unjustified premium risk**
@@ -207,6 +207,8 @@ For each sub-item, **conclusion first, evidence follows** — no boilerplate:
 
 After the moat rating, output the following valuation constraint parameters (replaces former Section 2.7):
 
+#### Standard Mode (PE-primary, default)
+
 ```markdown
 ### Moat → Valuation Constraint
 
@@ -215,6 +217,34 @@ After the moat rating, output the following valuation constraint parameters (rep
 **Premium Support Factors**: [1-2 factors]
 **Premium Risk**: [If moat is downgraded, PE could contract to XXx]
 ```
+
+#### Bank Mode (PB-primary, when valuation_primary == "PB")
+
+For banks, PB is the primary valuation metric. Use the PB-ROE framework instead:
+
+```markdown
+### Moat → Valuation Constraint (🏦 Bank PB Mode)
+
+**Rating**: [Wide/Narrow/None]  **Trend**: [Widening/Stable/Narrowing]
+**PB Reasonable Ceiling**: [XXx] (based on PB-ROE regression + peer comparison)
+**PB-ROE Regression**: PB = [a] + [b] × ROE (R² = [X.XX])
+**PB Valuation Corridor**:
+- P10 (Bear): [X.XXx] ([price]元) — ROE deterioration + NPL stress
+- P50 (Base): [X.XXx] ([price]元) — ROE stable at current level
+- P90 (Bull): [X.XXx] ([price]元) — ROE expansion + NPL improvement
+**DDM Auxiliary**: [cost of equity X.X%] → implied PB [X.XXx] (cross-check)
+
+**Key PB Driver**: Sustainable ROE (not growth). ROE [X.XX]% → justified PB [X.XX]x.
+**PB vs ROE Gap**: Actual PB [X.XX]x vs ROE-implied PB [X.XX]x → [over/under/fair]valued by [X]%
+**Premium Risk**: If moat downgrade / ROE < [7% kill switch], PB → [X.XX-X.XX]x, stock falls [X-X]%
+```
+
+**Bank-specific guidance for PB-ROE**:
+- PB is driven by sustainable ROE, not growth rate (unlike PE for growth stocks)
+- Key PB levers: NIM (revenue), credit cost (risk), operating cost ratio (efficiency)
+- PB corridor should incorporate NPL sensitivity (kill switch: NPL > 1.1% for PSBC)
+- DDM as cross-check: gordon growth model with dividend yield + sustainable growth
+- If `step2_comps_data.json` has `valuation_primary: "PB"`, the comps CLI automatically uses PB mode
 
 ### Confidence & Data Source Summary
 
@@ -272,3 +302,20 @@ After completing the moat rating, answer these two core questions (max 150 words
 3. 市场适配：
    - **港股**：使用 AKShare `stock_hk_valuation_comparison_em(symbol)` 获取同业估值对比（PE/PB/PS+排名），`stock_hk_growth_comparison_em(symbol)` 获取成长性对比。Tushare `moneyflow_hsgt`/`hk_hold` 仍可用于南向资金流。
    - **美股**：使用 AKShare `stock_us_daily(symbol)` 获取价格数据。同业估值需通过 WebSearch + `financial-analysis:comps-analysis` skill 从 SEC EDGAR 获取财务数据。
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**

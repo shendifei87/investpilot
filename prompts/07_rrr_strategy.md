@@ -157,6 +157,7 @@ If recommending waiting for a pullback entry, **RRR must be recalculated at the 
 2. mcp__tushareMcp__moneyflow_dc(ts_code="{ts_code}", start_date="{20天前}", end_date="{今天}")
    → 近 20 天资金流向（大单/中单/小单净额）
    → 用于判断当前资金方向：左侧入场需等大单企稳
+   ⚠️ **注意**: `moneyflow_dc` 在 2000 积分下可能返回权限错误 (code 40203)。如遇此情况，降级使用 `moneyflow` API（数据粒度较低但可用）
 
 3. mcp__tushareMcp__stk_limit(ts_code="{ts_code}", start_date="{今天}")
    → 涨跌停价格（用于止损/止盈价位参考）
@@ -171,3 +172,20 @@ If recommending waiting for a pullback entry, **RRR must be recalculated at the 
 2. 市场适配：
    - **港股**：使用 AKShare `stock_hk_daily(symbol, adjust="qfq")` 获取行情及成交量/成交额；`stock_hk_financial_indicator_em(symbol)` 获取财务指标。Tushare `moneyflow_hsgt` 仍可用于南向资金方向判断。
    - **美股**：使用 AKShare `stock_us_daily(symbol)` 获取近 30 天成交量/成交额。资金流向需通过 WebSearch 从东方财富等获取。
+
+### 🚨 MCP 参数限制硬规则（防 Context 爆炸）
+
+以下 MCP 工具**必须**携带日期参数，否则返回全历史数据（数百万字符）导致 context 爆炸：
+- `daily_basic`: 必须传 `trade_date` 或 `start_date`+`end_date`
+- `fina_indicator`: 必须传 `start_date`+`end_date` 或 `period`
+- `income` / `balancesheet` / `cashflow`: 必须传 `start_date`+`end_date` 或 `period`
+- `forecast` / `express`: 必须传 `start_date`+`end_date` 或 `period`
+- `daily` / `adj_factor`: 必须传 `start_date`+`end_date` 或 `trade_date`
+
+**推荐参数范围**：仅取最近 4 个季度（或最近 1 年）的数据。示例：
+```
+daily_basic(ts_code="600036.SH", start_date="20250101", end_date="20260612")
+fina_indicator(ts_code="600036.SH", start_date="20240101", end_date="20260612")
+```
+
+**违反此规则的调用 = 硬错误，必须立即修正。**
