@@ -489,6 +489,20 @@ class TestStructuredValidation:
         required = [c for c in result["checks"] if c["check"] == "assumption_matrix_required_fields"]
         assert required[0]["status"] == "FAIL"
 
+    def test_assumption_missing_mid_percentiles_fails(self, tmp_path):
+        structured = _full_valid_structured()
+        del structured["assumption_matrix"][0]["p30"]
+        del structured["assumption_matrix"][0]["p70"]
+        md_path = _write_step4_md(tmp_path)
+        _write_structured_json(tmp_path, structured)
+
+        result = validate_step4(md_path)
+
+        required = [c for c in result["checks"] if c["check"] == "assumption_matrix_required_fields"]
+        assert required[0]["status"] == "FAIL"
+        assert "p30" in required[0]["detail"]
+        assert "p70" in required[0]["detail"]
+
     def test_missing_financial_model_inputs_fails(self, tmp_path):
         structured = _full_valid_structured()
         del structured["financial_model_inputs"]

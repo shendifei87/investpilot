@@ -76,7 +76,7 @@ def get_tushare_token() -> str:
     return get_env_value("TUSHARE_TOKEN", TUSHARE_TOKEN)
 
 # ── Monte Carlo ──────────────────────────────────────────────────
-MONTE_CARLO_SIMULATIONS = int(os.getenv("MC_SIMS", "100000"))
+MONTE_CARLO_SIMULATIONS = int(os.getenv("MC_SIMS", "20000"))
 
 # ── Cache ────────────────────────────────────────────────────────
 CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "24"))

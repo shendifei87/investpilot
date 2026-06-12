@@ -7,6 +7,7 @@ without completed prerequisites.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -184,11 +185,22 @@ class ResearchWorkflow(WorkspaceStateBase):
         rec["started_at"] = _now()
         rec.pop("blocked_at", None)
         rec.pop("block_reason", None)
+        if force:
+            rec["forced_start"] = {
+                "at": _now(),
+                "guard": guard,
+            }
         # ── Clear stale guard artifacts ──
         _clear_guard_artifacts(self.workspace, step_id)
-        self._record("start", step_id, "force" if force else "")
+        self._record("start", step_id, f"force: {guard.get('reason', 'OK')}" if force else "")
         self._save()
-        return {"started": True, "step": step_id, "status": "in_progress", "forced": force}
+        return {
+            "started": True,
+            "step": step_id,
+            "status": "in_progress",
+            "forced": force,
+            "guard": guard,
+        }
 
     def complete_step(
         self,
@@ -216,6 +228,7 @@ class ResearchWorkflow(WorkspaceStateBase):
                 "reason": (
                     f"Artifact contract failed for Step {step_id}. "
                     f"Missing required: {artifact_status['missing_required']}; "
+                    f"invalid required: {artifact_status['invalid_required']}; "
                     f"forbidden present: {artifact_status['forbidden_present']}"
                 ),
                 "artifact_contract": artifact_status,
@@ -225,20 +238,155 @@ class ResearchWorkflow(WorkspaceStateBase):
                 "completed": False,
                 "reason": f"Artifact not found for Step {step_id}: {artifact}",
             }
+        semantic_gate = self._run_semantic_gate(step_id) if not force else {
+            "passed": True,
+            "step": step_id,
+            "summary": "semantic validation skipped by force",
+        }
+        if not semantic_gate.get("passed"):
+            return {
+                "completed": False,
+                "reason": (
+                    f"Validation gate failed for Step {step_id}: "
+                    f"{semantic_gate.get('summary', 'semantic validation failed')}"
+                ),
+                "artifact_contract": artifact_status,
+                "semantic_gate": semantic_gate,
+            }
         rec["status"] = "completed"
         rec["completed_at"] = _now()
         rec["artifact"] = artifact
         rec["artifact_contract"] = artifact_status
+        rec["semantic_gate"] = semantic_gate
         rec["validation_summary"] = validation_summary
-        self._record("complete", step_id, validation_summary)
+        if force:
+            rec["forced_completion"] = {
+                "at": _now(),
+                "artifact_contract_passed": bool(artifact_status.get("passed")),
+                "semantic_gate": semantic_gate,
+            }
+        detail = (
+            f"force: {validation_summary}; artifact_contract_passed={artifact_status.get('passed')}"
+            if force
+            else validation_summary
+        )
+        self._record("complete", step_id, detail)
         self._save()
 
         # ── Auto-trigger report generation on Step 9 completion ──
-        result = {"completed": True, "step": step_id, "status": "completed"}
+        result = {
+            "completed": True,
+            "step": step_id,
+            "status": "completed",
+            "forced": force,
+            "artifact_contract": artifact_status,
+            "semantic_gate": semantic_gate,
+        }
         if step_id == "9":
             result["post_research"] = self._auto_generate_reports()
 
         return result
+
+    def _load_json_artifact(self, filename: str) -> dict:
+        path = self.workspace / filename
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError(f"{filename} must contain a JSON object")
+        return data
+
+    def _run_semantic_gate(self, step_id: str) -> dict:
+        """Run deterministic validators for steps with configured gates."""
+        try:
+            if step_id == "4":
+                from src.analysis.step4_validate import validate_step4_with_guard
+
+                result = validate_step4_with_guard(
+                    self.workspace / get_step_contract("4").primary_artifact
+                )
+                return {
+                    "passed": bool(result.get("passed")),
+                    "step": step_id,
+                    "gate": "step4_validation",
+                    "summary": result.get("summary", ""),
+                    "details": result,
+                }
+
+            if step_id == "5":
+                from src.analysis.financial_model import validate_financial_model
+
+                model = self._load_json_artifact("forecast_model.json")
+                results = validate_financial_model(model, workspace=self.workspace)
+                fails = [item for item in results if item.get("status") == "FAIL"]
+                return {
+                    "passed": not fails,
+                    "step": step_id,
+                    "gate": "financial_model_validation",
+                    "summary": (
+                        "financial model validation passed"
+                        if not fails
+                        else f"{len(fails)} financial model validation failure(s)"
+                    ),
+                    "failures": fails,
+                    "results": results,
+                }
+
+            if step_id == "6":
+                from src.analysis.monte_carlo import validate_mc_p50_alignment
+
+                mc = self._load_json_artifact("monte_carlo_results.json")
+                model = self._load_json_artifact("forecast_model.json")
+                alignment = validate_mc_p50_alignment(mc, model)
+                checks = alignment.get("checks", [])
+                per_year = mc.get("per_year", {})
+                seed_present = mc.get("seed") is not None or (
+                    isinstance(per_year, dict)
+                    and bool(per_year)
+                    and all(
+                        isinstance(year, dict) and year.get("seed") is not None
+                        for year in per_year.values()
+                    )
+                )
+                issues = []
+                if not checks:
+                    issues.append("no comparable MC/forecast P50 metrics found")
+                if not alignment.get("passed"):
+                    issues.append(alignment.get("summary", "MC P50 alignment failed"))
+                if not seed_present:
+                    issues.append("simulation seed missing")
+                return {
+                    "passed": not issues,
+                    "step": step_id,
+                    "gate": "monte_carlo_validation",
+                    "summary": "Monte Carlo validation passed" if not issues else "; ".join(issues),
+                    "alignment": alignment,
+                    "seed_present": seed_present,
+                }
+
+            if step_id == "8":
+                from src.analysis.step8_audit import audit_step_chain
+
+                audit = audit_step_chain(self.workspace, through_step=8)
+                return {
+                    "passed": bool(audit.get("passed")),
+                    "step": step_id,
+                    "gate": "step8_audit",
+                    "summary": audit.get("summary", ""),
+                    "details": audit,
+                }
+        except Exception as exc:
+            return {
+                "passed": False,
+                "step": step_id,
+                "gate": "semantic_validation",
+                "summary": str(exc),
+            }
+
+        return {
+            "passed": True,
+            "step": step_id,
+            "summary": "no semantic validation gate configured",
+        }
 
     def _auto_generate_reports(self) -> dict:
         """Generate post-research report after Step 9 completes.

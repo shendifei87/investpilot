@@ -7,15 +7,13 @@ Runs as a stdio MCP server; forwards tool calls to tushare.pro_api().
 
 from __future__ import annotations
 
-import json
 import os
-import sys
 from typing import Any
 
+import mcp.types as types
 import tushare as ts
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-import mcp.types as types
 
 # ---------------------------------------------------------------------------
 # Configuration

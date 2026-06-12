@@ -50,7 +50,9 @@ STEP4_SCHEMA_DESCRIPTION = {
         "required": [
             "variable",
             "p10",
+            "p30",
             "p50",
+            "p70",
             "p90",
             "sensitivity",
             "confidence",
@@ -58,7 +60,7 @@ STEP4_SCHEMA_DESCRIPTION = {
             "derivation",
             "what_would_change_this",
         ],
-        "recommended": ["p30", "p70", "segment", "year"],
+        "recommended": ["segment", "year"],
         "percentile_format_note": "All growth/margin/ratio values must be in decimal form (0.20 = 20%). Values > 1.0 for percentage-type variables are rejected at validation.",
     },
     "financial_model_inputs": {

@@ -21,14 +21,14 @@ Status: implemented.
 Deliverables:
 
 - `config/step_contracts.json` as the canonical 0-9 step registry.
-- Python contract loader in `src/contracts/`.
-- Workflow completion gated by required artifacts, not only markdown existence.
+- Python contract loader in `src/contracts/`, with import-time registry validation.
+- Workflow completion gated by required, non-empty, parseable artifacts, not only markdown existence.
 - Report and web step metadata derived from the same contract.
 - Tests covering contract consistency and artifact contract enforcement.
 
 Acceptance:
 
-- A step cannot complete unless all required artifacts exist.
+- A step cannot complete unless all required artifacts exist and pass basic payload validation.
 - Deprecated split/combined Step 4 artifacts are rejected instead of reused.
 - Python tests, web tests, TypeScript checks, and compile checks pass.
 
@@ -55,7 +55,7 @@ Status: partially implemented.
 Deliverables:
 
 - Driver-tree schema for segment revenues and margin/cost drivers.
-- Validator for no bare growth rates, driver contribution sums, evidence coverage, P10/P50/P90 monotonicity, and P50 to P10 falsification paths.
+- Validator for no bare growth rates, driver contribution sums, evidence coverage, P10/P30/P50/P70/P90 monotonicity, and P50 to P10 falsification paths.
 - User-reviewed assumption lock that Step 5 and Step 6 must consume exactly.
 - Calibration records for post-earnings actual-vs-forecast learning.
 

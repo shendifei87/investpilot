@@ -51,8 +51,8 @@ Do not alter Step 4 assumptions. Do not change the Step 5 model after simulation
 3. PE/PB valuation multiples use lognormal distributions.
 4. Dependency structure must use t-Copula with `copula_df=6`.
 5. Keep non-Gaussian tails; do not collapse to independent normal assumptions.
-6. Run enough simulations for stable P10/P50/P90 output.
-7. Report current price, P10/P50/P90 target prices, expected upside/downside, probability of loss, and RRR inputs for Step 7.
+6. Run enough simulations for stable P10/P30/P50/P70/P90 output; default to 20,000 unless explicitly overridden.
+7. Report current price, P10/P30/P50/P70/P90 target prices, expected upside/downside, probability of loss, and RRR inputs for Step 7.
 8. Show both T+1 and T+2 outputs. Add T+3 if Step 4 selected T+3 as the primary forward year.
 
 ## Pre-Simulation Consistency Check
@@ -71,7 +71,7 @@ Write `step6_monte_carlo_simulation.md` in this order:
 
 1. Assumption matrix summary
 2. Monte Carlo distribution chart
-3. P10/P50/P90 valuation table
+3. P10/P30/P50/P70/P90 valuation table
 4. Three-year EPS bridge and model cross-check
 5. Correlation and t-Copula assumptions
 6. Forward PE band
@@ -226,7 +226,7 @@ Compare PB-based target price P50 vs DDM P50. Gap > 15% → flag for investigati
 
 ## 分布拟合辅助函数: `fit_distribution_from_percentiles`
 
-**不要手动计算 μ/σ。** 使用已内置的辅助函数从 P10/P50/P90 百分位直接拟合分布。
+**不要手动计算 μ/σ。** 使用已内置的辅助函数从 P10/P30/P50/P70/P90 百分位直接拟合分布。
 
 ### 函数签名
 
@@ -234,7 +234,7 @@ Compare PB-based target price P50 vs DDM P50. Gap > 15% → flag for investigati
 from src.analysis.monte_carlo import fit_distribution_from_percentiles
 
 dist = fit_distribution_from_percentiles(
-    percentiles={10: 2.8, 50: 3.5, 90: 4.2},  # {百分位: 数值}，至少2个点
+    percentiles={10: 2.8, 30: 3.2, 50: 3.5, 70: 3.8, 90: 4.2},
     dist_type="normal",      # "normal" 或 "lognormal"
     direction="higher_is_better",  # 或 "lower_is_better"
 )
@@ -254,26 +254,26 @@ dist = fit_distribution_from_percentiles(
 ```python
 # 1. Forward PE — LogNormal, 严格正值，右偏
 pe_dist = fit_distribution_from_percentiles(
-    percentiles={10: 25, 50: 38, 90: 50},
+    percentiles={10: 25, 30: 32, 50: 38, 70: 44, 90: 50},
     dist_type="lognormal",
 )
 
 # 2. 收入增速 — Normal, 对称
 rev_dist = fit_distribution_from_percentiles(
-    percentiles={10: 0.10, 50: 0.23, 90: 0.30},
+    percentiles={10: 0.10, 30: 0.18, 50: 0.23, 70: 0.27, 90: 0.30},
     dist_type="normal",
 )
 
 # 3. 信用成本（银行）— lower_is_better, P10=高(差), P90=低(好)
 credit_dist = fit_distribution_from_percentiles(
-    percentiles={10: 1.2, 50: 0.8, 90: 0.5},
+    percentiles={10: 1.2, 30: 1.0, 50: 0.8, 70: 0.65, 90: 0.5},
     dist_type="normal",
     direction="lower_is_better",  # 自动翻转: P10→0.5, P90→1.2
 )
 
 # 4. 五点拟合（更精确）
 pe_dist = fit_distribution_from_percentiles(
-    percentiles={10: 25, 25: 30, 50: 38, 75: 45, 90: 50},
+    percentiles={10: 25, 30: 32, 50: 38, 70: 44, 90: 50},
     dist_type="lognormal",
 )
 ```
@@ -284,7 +284,7 @@ pe_dist = fit_distribution_from_percentiles(
 - 自动设置截断边界为拟合分布的 P1/P99，防止模拟超出分析师预期范围
 - 如果百分位值非严格递增（如 P10 ≥ P50），会抛出 `ValueError` — 检查 `direction` 设置
 - LogNormal 要求所有百分位值 > 0
-- **Step 4 假设矩阵中的 P10/P50/P90 直接作为此函数的输入**，无需手动转换
+- **Step 4 假设矩阵中的 P10/P30/P50/P70/P90 直接作为此函数的输入**，无需手动转换
 
 ## Contrarian Check
 

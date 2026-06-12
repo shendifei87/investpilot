@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,8 @@ from scipy.stats import t as t_dist
 from config.settings import MONTE_CARLO_SIMULATIONS, WORKSPACES_DIR
 from src.analysis._base import resolve_workspace_path
 from src.storage import AtomicJSON
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────
 #  Distribution classes
@@ -819,7 +822,7 @@ def verify_assumption_consistency(
 ) -> dict:
     """Verify Monte Carlo assumptions match the user-reviewed matrix.
 
-    Compares the reviewed percentiles (P10/P50/P90 when present) of each
+    Compares the reviewed percentiles (P10/P30/P50/P70/P90 when present) of each
     variable against the actual distributions passed to run_monte_carlo().
     New simulation variables and omitted reviewed variables are hard failures:
     the Monte Carlo model must be identical to the user-reviewed matrix.
@@ -827,7 +830,7 @@ def verify_assumption_consistency(
     Also validates:
     - Correlation matrix: symmetry, positive-definiteness, unit diagonal, off-diag in [-1,1]
     - copula_df > 2 (required for valid t-distribution scaling)
-    - n_simulations sufficiency (>= 10,000 recommended)
+    - n_simulations sufficiency (>= 20,000 recommended for standard runs)
     - dist_type consistency with variable naming conventions
 
     Returns {passed: bool, warnings: list, violations: list}.
@@ -859,7 +862,7 @@ def verify_assumption_consistency(
     for var_name in sorted(reviewed_vars - sim_vars):
         violations.append(f"Reviewed variable '{var_name}' is absent from Monte Carlo assumptions")
 
-    percentile_map = {"p10": 0.10, "p50": 0.50, "p90": 0.90}
+    percentile_map = {"p10": 0.10, "p30": 0.30, "p50": 0.50, "p70": 0.70, "p90": 0.90}
 
     for var_name, dist in monte_carlo_assumptions.items():
         if var_name not in reviewed_assumptions:
@@ -941,10 +944,10 @@ def verify_assumption_consistency(
                 f"n_simulations={n_simulations:,} is below 10,000 — "
                 f"percentile estimates (especially P5/P95) may be noisy"
             )
-        elif n_simulations < 50_000:
+        elif n_simulations < 20_000:
             warnings.append(
-                f"n_simulations={n_simulations:,} — P5/P95 estimates have moderate noise; "
-                f"100,000+ recommended for production"
+                f"n_simulations={n_simulations:,} — 20,000+ recommended for standard runs; "
+                f"use 50,000+ for tail-sensitive final sizing"
             )
 
     # dist_type consistency: PE/PB should be lognormal
@@ -1142,11 +1145,40 @@ def validate_mc_p50_alignment(
         {"passed": bool, "checks": [...], "summary": str}
         Each check: {"metric", "mc_p50", "forecast_p50", "pct_diff", "passed"}
     """
-    period_data = forecast_model.get("periods", {}).get(primary_forward_year, {})
+    def _forecast_period_data() -> dict:
+        period_data = forecast_model.get("periods", {}).get(primary_forward_year, {})
+        if period_data:
+            return period_data
+
+        # Standard forecast_model.json stores period values in statement rows.
+        statements = forecast_model.get("statements", {})
+        valuation_rows = statements.get("valuation", [])
+        if not isinstance(valuation_rows, list):
+            return {}
+
+        extracted: dict[str, float] = {}
+        for row in valuation_rows:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label", "")).lower()
+            values = row.get("values", {})
+            if not isinstance(values, dict) or primary_forward_year not in values:
+                continue
+            value = values.get(primary_forward_year)
+            if "eps" in label and "diluted" in label:
+                extracted["eps"] = value
+            elif label in {"bps", "book value per share"}:
+                extracted["bps"] = value
+            elif label == "roe" or "return on equity" in label:
+                extracted["roe"] = value
+        return extracted
+
+    period_data = _forecast_period_data()
 
     # Detect format: arrays (in-memory) vs percentiles (persisted JSON)
     has_arrays = isinstance(mc_results.get("eps"), np.ndarray)
     has_pctls = "eps_percentiles" in mc_results or "bps_percentiles" in mc_results
+    per_year = mc_results.get("per_year", {})
 
     def _get_mc_p50(metric: str) -> float | None:
         """Extract P50 for a metric from either format."""
@@ -1158,6 +1190,22 @@ def validate_mc_p50_alignment(
             p50 = pctls.get("50") or pctls.get(50)
             if p50 is not None:
                 return float(p50)
+        if isinstance(per_year, dict) and per_year:
+            year_data = per_year.get(primary_forward_year)
+            if year_data is None:
+                year_data = next(iter(per_year.values()))
+            if isinstance(year_data, dict):
+                metric_aliases = {
+                    "eps": ("eps", "eps_rmb", "eps_cny", "eps_usd"),
+                    "bps": ("bps", "bps_rmb", "bps_cny", "book_value_per_share"),
+                    "roe": ("roe", "roe_pct", "roe_percent"),
+                }
+                for alias in metric_aliases.get(metric, (metric,)):
+                    pctls = year_data.get(alias)
+                    if isinstance(pctls, dict):
+                        p50 = pctls.get("p50") or pctls.get("50") or pctls.get(50)
+                        if p50 is not None:
+                            return float(p50)
         return None
 
     checks = []

@@ -29,6 +29,7 @@ Checks (15 total):
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -507,10 +508,8 @@ def _validate_structured(structured: dict, filepath: Path) -> list[dict]:
     _reviewed_fallback: dict = {}
     _reviewed_path = filepath.parent / "_reviewed_assumptions.json"
     if _reviewed_path.exists():
-        try:
+        with contextlib.suppress(json.JSONDecodeError, OSError):
             _reviewed_fallback = json.loads(_reviewed_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
     valuation_mode = str(
         structured.get("financial_model_inputs", {}).get(
             "valuation_mode",
@@ -824,7 +823,9 @@ def _validate_assumption_matrix(structured: dict, workspace: Path) -> list[dict]
         required = [
             "variable",
             "p10",
+            "p30",
             "p50",
+            "p70",
             "p90",
             "sensitivity",
             "confidence",

@@ -12,6 +12,7 @@ from src.contracts.step_contracts import (
     get_step_contract,
     normalize_step_id,
     report_step_config,
+    validate_contract_registry,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "get_step_contract",
     "normalize_step_id",
     "report_step_config",
+    "validate_contract_registry",
 ]

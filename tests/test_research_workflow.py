@@ -21,7 +21,13 @@ def _workflow_named(tmp_path, name):
 
 def _write_required_artifacts(ws_dir, step):
     for artifact in get_step_contract(step).required_artifacts:
-        (ws_dir / artifact).write_text(f"# {artifact}\n", encoding="utf-8")
+        path = ws_dir / artifact
+        if path.suffix == ".json":
+            path.write_text("{}", encoding="utf-8")
+        elif path.suffix == ".html":
+            path.write_text("<html><body>ok</body></html>", encoding="utf-8")
+        else:
+            path.write_text(f"# {artifact}\n", encoding="utf-8")
 
 
 class TestResearchWorkflow:
@@ -99,10 +105,32 @@ class TestResearchWorkflow:
         # Complete Step 4
         _write_required_artifacts(ws, "4")
         assert wf.start_step("4")["started"] is True
-        assert wf.complete_step("4")["completed"] is True
+        with patch(
+            "src.analysis.step4_validate.validate_step4_with_guard",
+            return_value={"passed": True, "summary": "ok"},
+        ):
+            assert wf.complete_step("4")["completed"] is True
         # Step 5 now allowed, Step 6 still blocked
         assert wf.can_start("5")["allowed"] is True
         assert wf.can_start("6")["allowed"] is False
+
+    def test_step4_semantic_gate_blocks_completion(self, tmp_path):
+        wf, ws = _workflow(tmp_path)
+        for n in ("1", "2", "3"):
+            (ws / STEP_FILES[n]).write_text(f"# Step {n}\n", encoding="utf-8")
+        wf.sync_from_files()
+        _write_required_artifacts(ws, "4")
+        assert wf.start_step("4")["started"] is True
+
+        with patch(
+            "src.analysis.step4_validate.validate_step4_with_guard",
+            return_value={"passed": False, "summary": "missing driver decomposition"},
+        ):
+            result = wf.complete_step("4")
+
+        assert result["completed"] is False
+        assert "Validation gate failed for Step 4" in result["reason"]
+        assert result["semantic_gate"]["gate"] == "step4_validation"
 
     def test_start_step5_clears_stale_step4_guard_artifacts(self, tmp_path):
         wf, ws = _workflow(tmp_path)
@@ -210,6 +238,21 @@ class TestResearchWorkflowExtended:
         result = wf.start_step(10)
         assert result["started"] is False
         assert "Invalid step" in result["reason"]
+
+    def test_force_completion_records_contract_and_semantic_skip(self, tmp_path):
+        wf, ws = _workflow(tmp_path)
+        assert wf.start_step("1")["started"] is True
+
+        result = wf.complete_step("1", force=True, validation_summary="manual override")
+
+        assert result["completed"] is True
+        assert result["forced"] is True
+        assert result["artifact_contract"]["passed"] is False
+        assert result["semantic_gate"]["summary"] == "semantic validation skipped by force"
+        state = json.loads((ws / "research_workflow.json").read_text(encoding="utf-8"))
+        rec = state["steps"]["1"]
+        assert rec["forced_completion"]["artifact_contract_passed"] is False
+        assert state["history"][-1]["detail"].startswith("force: manual override")
 
     def test_block_step_ignored_by_next_step(self, tmp_path):
         wf, ws = _workflow(tmp_path)

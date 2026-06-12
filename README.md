@@ -21,7 +21,7 @@ A deep fundamental investment research harness built on Claude Code. Emphasizes 
 
 ```bash
 # Requires Python 3.9+
-pip install -e ".[dev]"
+uv sync --dev
 
 # Web dashboard (TypeScript)
 cd web && npm install
@@ -30,7 +30,7 @@ cd web && npm install
 Or install dependencies manually:
 
 ```bash
-pip install tushare akshare pandas numpy scipy matplotlib requests tabulate pytest
+uv pip install tushare akshare pandas numpy scipy matplotlib requests tabulate pytest
 ```
 
 ## Configuration
@@ -56,11 +56,11 @@ mkdir -p workspaces/AAPL
 
 ```bash
 # Detect market
-python -m src.cli detect AAPL
+uv run python -m src.cli detect AAPL
 # → {"market": "US", "normalized": "AAPL"}
 
 # Fetch data into workspace
-python -m src.cli fetch AAPL -o workspaces/AAPL
+uv run python -m src.cli fetch AAPL -o workspaces/AAPL
 ```
 
 ### 3. Launch Research
@@ -104,7 +104,7 @@ A synthetic demo workspace is available at `workspaces/_sample/` with fabricated
 cat workspaces/_sample/step0_quick_triage.md
 
 # View sample financial model
-python -c "import json; print(json.dumps(json.load(open('workspaces/_sample/forecast_model.json')), indent=2))"
+uv run python -c "import json; print(json.dumps(json.load(open('workspaces/_sample/forecast_model.json')), indent=2))"
 ```
 
 No real financial data is included. All numbers are synthetic.
@@ -177,7 +177,7 @@ investpilot/
 
 ```bash
 # Python tests (analysis engine, CLI, data fetchers)
-python -m pytest tests/ -v
+uv run pytest tests/ -v
 
 # TypeScript tests (web layer)
 cd web && npm test

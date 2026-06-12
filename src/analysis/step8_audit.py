@@ -12,29 +12,43 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.contracts import CORE_STEP_IDS, get_step_contract
+from src.contracts import CORE_STEP_IDS, artifact_contract_status, get_step_contract
 
 # ──────────────────────────────────────────────
 #  Individual audit checks
 # ──────────────────────────────────────────────
 
 
-def _check_artifact_chain(workspace: Path) -> list[dict]:
-    """Verify every core step's primary artifact exists."""
+def _core_steps_through(through_step: int | str) -> list[str]:
+    step_id = str(through_step)
+    if step_id not in CORE_STEP_IDS:
+        return list(CORE_STEP_IDS)
+    return list(CORE_STEP_IDS[: CORE_STEP_IDS.index(step_id) + 1])
+
+
+def _check_artifact_chain(workspace: Path, through_step: int | str = 9) -> list[dict]:
+    """Verify every core step satisfies the canonical artifact contract."""
     checks = []
-    for step_id in CORE_STEP_IDS:
+    for step_id in _core_steps_through(through_step):
         contract = get_step_contract(step_id)
-        artifact = workspace / contract.primary_artifact
-        exists = artifact.exists()
+        status = artifact_contract_status(workspace, step_id)
+        issues = []
+        if status["missing_required"]:
+            issues.append(f"missing={status['missing_required']}")
+        if status["invalid_required"]:
+            issues.append(f"invalid={status['invalid_required']}")
+        if status["forbidden_present"]:
+            issues.append(f"forbidden={status['forbidden_present']}")
         checks.append(
             {
-                "check": f"artifact_exists:step{step_id}",
-                "status": "PASS" if exists else "FAIL",
+                "check": f"artifact_contract:step{step_id}",
+                "status": "PASS" if status["passed"] else "FAIL",
                 "detail": (
-                    f"{contract.primary_artifact} found"
-                    if exists
-                    else f"{contract.primary_artifact} MISSING"
+                    f"{contract.primary_artifact} artifact contract satisfied"
+                    if status["passed"]
+                    else "; ".join(issues)
                 ),
+                "artifact_contract": status,
             }
         )
     return checks
@@ -323,11 +337,11 @@ def _get_p50(pctls: dict) -> float | None:
 # ──────────────────────────────────────────────
 
 
-def audit_step_chain(workspace_dir: str | Path) -> dict:
+def audit_step_chain(workspace_dir: str | Path, through_step: int | str = 8) -> dict:
     """Run the full Step 8 automated pipeline audit.
 
     Checks:
-      1. Artifact chain completeness (all step artifacts exist)
+      1. Artifact chain completeness (step artifacts through ``through_step`` exist)
       2. Contrarian check coverage (all steps have contrarian sections)
       3. MC P50 alignment with forecast model (unit-convention guard)
       4. Valuation cross-check (calculated_valuation.json vs MC results)
@@ -343,7 +357,7 @@ def audit_step_chain(workspace_dir: str | Path) -> dict:
     all_checks: list[dict] = []
 
     # 1. Artifact chain
-    all_checks.extend(_check_artifact_chain(workspace))
+    all_checks.extend(_check_artifact_chain(workspace, through_step=through_step))
 
     # 2. Contrarian coverage
     all_checks.extend(_check_contrarian_coverage(workspace))

@@ -45,9 +45,9 @@ When the user provides a stock ticker or explicitly requests research on a stock
 
 Step 1–9 **must** execute strictly in serial. No parallel agents across steps. Each step must pass workflow guard before starting:
 
-- **Start**: `python -m src.cli workflow {workspace_dir} start --step N`
-- **Complete**: `python -m src.cli workflow {workspace_dir} complete --step N --artifact stepN_xxx.md`
-- **Block**: `python -m src.cli workflow {workspace_dir} block --step N --reason "..."`
+- **Start**: `uv run python -m src.cli workflow {workspace_dir} start --step N`
+- **Complete**: `uv run python -m src.cli workflow {workspace_dir} complete --step N --artifact stepN_xxx.md`
+- **Block**: `uv run python -m src.cli workflow {workspace_dir} block --step N --reason "..."`
 
 Dependencies: Step N requires all prior serial steps completed. Step 0 is optional.
 
@@ -75,7 +75,7 @@ Step 0 does **not** replace formal valuation. Never use news/reports/API-provide
 After all steps complete, generate reports:
 
 - **Markdown**: `workspaces/{workspace_dir}/{ticker}_report_{YYYYMMDD}.md`
-- **HTML**: `python -m src.cli report {workspace_dir}` → self-contained HTML with inline CSS, base64 charts, collapsible navigation, metric cards
+- **HTML**: `uv run python -m src.cli report {workspace_dir}` → self-contained HTML with inline CSS, base64 charts, collapsible navigation, metric cards
 
 ### Post-Research: Thesis & Catalyst Init
 
@@ -192,7 +192,7 @@ InvestPilot uses a **multi-source data architecture**: Python clients for batch 
 
 | Layer | Tool | Market | When | Purpose |
 |:------|:-----|:-------|:-----|:--------|
-| Batch | `python -m src.cli fetch` | A-share | Before Step 0 | Download financials, prices, indices to CSV |
+| Batch | `uv run python -m src.cli fetch` | A-share | Before Step 0 | Download financials, prices, indices to CSV |
 | Real-time | `tushareMcp__*` MCP tools | A-share | During each step | Supplement with latest data (capital flow, news, peers) |
 | HK data | AKShare (Python) | HK | During HK research | Daily prices, financials, industry comparisons |
 | US data | AKShare (Python) | US | During US research | Daily prices, macro data |

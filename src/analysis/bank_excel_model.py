@@ -133,7 +133,6 @@ def build_bank_excel(workspace: Path, ticker: str) -> Path:
 
     # ── Load data ──────────────────────────────────────────────────────────
     forecast = json.loads((workspace / "forecast_model.json").read_text(encoding="utf-8"))
-    bank_model = json.loads((workspace / f"{ticker}_bank_model.json").read_text(encoding="utf-8"))
     ddm_path = workspace / f"{ticker}_ddm_valuation.json"
     ddm = json.loads(ddm_path.read_text(encoding="utf-8")) if ddm_path.exists() else {}
 

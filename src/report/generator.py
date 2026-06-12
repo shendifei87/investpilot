@@ -61,7 +61,7 @@ def generate_distribution_from_percentiles(
     current_price: float = None,
     save_path: Path = None,
     currency: str = "HKD",
-    n_samples: int = 50000,
+    n_samples: int = 20000,
 ) -> str:
     """Synthesize a target-price distribution from percentile inputs.
 
@@ -81,14 +81,14 @@ def generate_distribution_from_percentiles(
     Returns:
         str: Path to saved PNG file.
     """
-    # --- Calibrate skew-normal to match P10 / P50 / P90 ---
+    # --- Calibrate skew-normal to match P10 / P30 / P50 / P70 / P90 ---
     # We use scipy.optimize to find (a, loc, scale) such that the
     # skew-normal percentiles match the supplied ones.
     from scipy.optimize import minimize
     from scipy.stats import skewnorm
 
-    target_pcts = np.array([10, 50, 90])
-    target_vals = np.array([p10, p50, p90])
+    target_pcts = np.array([10, 30, 50, 70, 90])
+    target_vals = np.array([p10, p30, p50, p70, p90])
 
     def _loss(params):
         a, loc, scale = params
@@ -181,7 +181,7 @@ def generate_histogram_from_percentiles(
     title: str = "Monte Carlo Target Price Distribution",
     save_path: Path = None,
     currency: str = "HKD",
-    n_samples: int = 100000,
+    n_samples: int = 20000,
 ) -> str:
     """Generate side-by-side histogram charts from percentile data.
 
@@ -195,7 +195,7 @@ def generate_histogram_from_percentiles(
             - percentiles (dict): e.g. {"5": 97.57, "10": 111.39, ..., "95": 317.53}
             - current_price (float | None)
             - n_simulations (int, optional)
-            - subtitle (str, optional): e.g. "100,000 simulations"
+            - subtitle (str, optional): e.g. "20,000 simulations"
         title: Overall chart title.
         save_path: Output PNG path.
         currency: Currency symbol for axis label.
@@ -246,9 +246,15 @@ def generate_histogram_from_percentiles(
             ax.set_title(label, fontsize=13, fontweight="bold")
             continue
 
-        # Calibrate skew-normal to P10/P50/P90
-        target_pcts = np.array([10, 50, 90])
-        target_vals = np.array([p10 or p5, p50, p90 or p95])
+        # Calibrate skew-normal to the densest available percentile grid.
+        p30 = _pct_val(pctls, 30)
+        p70 = _pct_val(pctls, 70)
+        if all(v is not None for v in [p10, p30, p50, p70, p90]):
+            target_pcts = np.array([10, 30, 50, 70, 90])
+            target_vals = np.array([p10, p30, p50, p70, p90])
+        else:
+            target_pcts = np.array([10, 50, 90])
+            target_vals = np.array([p10 or p5, p50, p90 or p95])
 
         def _loss(params, _tp=target_pcts, _tv=target_vals):
             a, loc, scale = params
@@ -1462,8 +1468,8 @@ def generate_report_html(
                                         "label": yr_label,
                                         "percentiles": tp,
                                         "current_price": yr_price,
-                                        "n_simulations": mc_data.get("n_simulations", 100000),
-                                        "subtitle": f"{mc_data.get('n_simulations', 100000):,} simulations",
+                                        "n_simulations": mc_data.get("n_simulations", 20000),
+                                        "subtitle": f"{mc_data.get('n_simulations', 20000):,} simulations",
                                     }
                                 )
 
@@ -1476,7 +1482,7 @@ def generate_report_html(
                         )
                         if isinstance(tp_pctls, dict) and len(tp_pctls) >= 3:
                             cur = mc_data.get("current_price")
-                            n_sims = mc_data.get("n_simulations", 100000)
+                            n_sims = mc_data.get("n_simulations", 20000)
                             ks = mc_data.get("kill_switch", {})
                             filter_desc = ""
                             if ks:
@@ -1511,7 +1517,7 @@ def generate_report_html(
                             title=f"{ticker} Monte Carlo Target Price Distribution",
                             save_path=dist_png,
                             currency=currency,
-                            n_samples=max(s.get("n_simulations", 100000) for s in scenarios),
+                            n_samples=max(s.get("n_simulations", 20000) for s in scenarios),
                         )
                         if dist_png.exists():
                             print(f"  ✓ Distribution chart (histogram) generated: {dist_png}")
@@ -1539,8 +1545,9 @@ def generate_report_html(
                 pe_item = _find_in_matrix(am_raw, "pe")
                 if eps_item and pe_item:
                     pcts = [10, 30, 50, 70, 90]
-                    has_eps = all(p in eps_item for p in ["p10", "p50", "p90"])
-                    has_pe = all(p in pe_item for p in ["p10", "p50", "p90"])
+                    required_keys = [f"p{p}" for p in pcts]
+                    has_eps = all(p in eps_item for p in required_keys)
+                    has_pe = all(p in pe_item for p in required_keys)
                     if has_eps and has_pe:
                         price_pcts = {}
                         for p in pcts:
@@ -1548,16 +1555,16 @@ def generate_report_html(
                             pe_val = pe_item.get(f"p{p}")
                             if eps_val is not None and pe_val is not None:
                                 price_pcts[p] = float(eps_val) * float(pe_val)
-                        if all(p in price_pcts for p in [10, 50, 90]):
+                        if all(p in price_pcts for p in pcts):
                             mc_png = ws / "monte_carlo_distribution.png"
                             cur_price = sa.get("current_price_hkd")
                             generate_distribution_from_percentiles(
                                 p10=price_pcts[10],
-                                p30=price_pcts.get(30, (price_pcts[10] + price_pcts[50]) / 2),
+                                p30=price_pcts[30],
                                 p50=price_pcts[50],
-                                p70=price_pcts.get(70, (price_pcts[50] + price_pcts[90]) / 2),
+                                p70=price_pcts[70],
                                 p90=price_pcts[90],
-                                title=f"{ticker} Monte Carlo Target Price Distribution (50K runs, t-Copula df=6)",
+                                title=f"{ticker} Monte Carlo Target Price Distribution (20,000 runs, t-Copula df=6)",
                                 current_price=cur_price,
                                 save_path=mc_png,
                                 currency=currency,
@@ -1618,7 +1625,7 @@ def generate_report_html(
                             p50=price_pcts[50],
                             p70=price_pcts[70],
                             p90=price_pcts[90],
-                            title=f"{ticker} Monte Carlo Target Price Distribution (50K runs)",
+                            title=f"{ticker} Monte Carlo Target Price Distribution (20,000 runs)",
                             current_price=cur_price,
                             save_path=mc_png,
                             currency=currency,
@@ -1639,13 +1646,14 @@ def generate_report_html(
                     and p90_data.get("target_price_hkd")
                 ):
                     mc_png = ws / "monte_carlo_distribution.png"
+                    n_sims = mc_data.get("n_simulations", 20000)
                     generate_distribution_from_percentiles(
                         p10=p10_data["target_price_hkd"],
                         p30=(p10_data["target_price_hkd"] + p50_data["target_price_hkd"]) / 2,
                         p50=p50_data["target_price_hkd"],
                         p70=(p50_data["target_price_hkd"] + p90_data["target_price_hkd"]) / 2,
                         p90=p90_data["target_price_hkd"],
-                        title=f"{ticker} Monte Carlo Target Price Distribution (10K runs, t-Copula df=6)",
+                        title=f"{ticker} Monte Carlo Target Price Distribution ({n_sims:,} runs, t-Copula df=6)",
                         current_price=sa.get("current_price_hkd") if sa else None,
                         save_path=mc_png,
                         currency=currency,

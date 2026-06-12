@@ -45,9 +45,9 @@ When the user provides a stock ticker or explicitly requests research on a stock
 
 Step 1–9 **must** execute strictly in serial. No parallel agents across steps. Each step must pass workflow guard before starting:
 
-- **Start**: `python -m src.cli workflow {workspace_dir} start --step N`
-- **Complete**: `python -m src.cli workflow {workspace_dir} complete --step N --artifact stepN_xxx.md`
-- **Block**: `python -m src.cli workflow {workspace_dir} block --step N --reason "..."`
+- **Start**: `uv run python -m src.cli workflow {workspace_dir} start --step N`
+- **Complete**: `uv run python -m src.cli workflow {workspace_dir} complete --step N --artifact stepN_xxx.md`
+- **Block**: `uv run python -m src.cli workflow {workspace_dir} block --step N --reason "..."`
 
 Dependencies: Step N requires all prior steps completed. Step 0 is optional.
 
@@ -77,7 +77,7 @@ Step 9 completion auto-triggers report generation via `_auto_generate_reports()`
 If auto-generation failed, run manually:
 
 ```bash
-python -m src.cli report {workspace_dir}
+uv run python -m src.cli report {workspace_dir}
 ```
 
 **Output artifacts** (all must exist before declaring research complete):
@@ -110,7 +110,7 @@ For revisiting stocks with open thesis. Full workflow: `prompts/09_research_dire
 - Tushare `hk_basic`/`hk_daily`/`hk_fina_indicator` used as supplement only when AKShare fails
 - Tushare `moneyflow_hsgt`/`hk_hold` still available for southbound capital flow
 - HK annual report PDFs are almost always scanned images — **WebSearch is the standard path** for MD&A extraction; do not waste time retrying PDF reads
-- `python -m src.cli step4-template` prints a valid Step 4 JSON skeleton
+- `uv run python -m src.cli step4-template` prints a valid Step 4 JSON skeleton
 
 ## Valuation Framework
 
@@ -183,4 +183,4 @@ Multi-source architecture: Python batch + MCP real-time + AKShare (HK/US). Each 
 3. **Empty MCP response → WebSearch fallback**: Never block on a failed MCP call
 4. **No APIs exceeding 2000 points**: Only confirmed 2000-point-or-below APIs are listed in prompt files
 5. **HK/US use AKShare, not Tushare**: AKShare is primary for HK/US data. US financials require WebSearch + SEC EDGAR fallback.
-6. **🚨 WebSearch必须验证发布日期**: 过期文章可能被错误匹配为近期内容。关键证据必须用 `web-reader` 确认日期。程序化验证: `python -m src.cli verify-news --url "..." --max-age 90`。详见全局 CLAUDE.md 的完整验证规则和代码示例。
+6. **🚨 WebSearch必须验证发布日期**: 过期文章可能被错误匹配为近期内容。关键证据必须用 `web-reader` 确认日期。程序化验证: `uv run python -m src.cli verify-news --url "..." --max-age 90`。详见全局 CLAUDE.md 的完整验证规则和代码示例。

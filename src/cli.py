@@ -8,7 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
-from config.settings import WORKSPACES_DIR
+from config.settings import MONTE_CARLO_SIMULATIONS, WORKSPACES_DIR
 from config.ticker_rules import detect_market, normalize_ticker
 from src.data.market_detector import get_fetcher
 
@@ -23,7 +23,7 @@ def cmd_detect(args):
         "normalized": normalized,
         "market": market,
     }
-    if getattr(args, "create_workspace", False):
+    if getattr(args, "create_workspace", False) is True:
         ws_dir = WORKSPACES_DIR / normalized.replace(".", "_")
         ws_dir.mkdir(parents=True, exist_ok=True)
         result["workspace"] = str(ws_dir)
@@ -1344,7 +1344,7 @@ def cmd_mc(args):
         print("   No correlations_defined in reviewed assumptions — running independent")
 
     # ── Run simulation ──
-    n_sims = int(args.sims) if args.sims else 100_000
+    n_sims = int(args.sims) if args.sims is not None else MONTE_CARLO_SIMULATIONS
     seed = int(args.seed) if args.seed else None
 
     print(f"Running {n_sims} simulations per year (cumulative mode)...")
@@ -1701,7 +1701,7 @@ def main():
         help="Run cumulative Monte Carlo simulation from reviewed assumptions",
     )
     p_mc.add_argument("workspace", help="Workspace directory name or path")
-    p_mc.add_argument("--sims", type=int, default=100000, help="Number of simulations (default: 100000)")
+    p_mc.add_argument("--sims", type=int, default=None, help="Number of simulations (default: 20000)")
     p_mc.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     p_mc.set_defaults(func=cmd_mc)
 

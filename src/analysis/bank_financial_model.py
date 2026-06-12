@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -507,7 +506,7 @@ def ddm_valuation(
     dps_t1: float,
     growth_rate: float,
     required_return: float,
-    terminal_growth: Optional[float] = None,
+    terminal_growth: float | None = None,
 ) -> dict:
     """Dividend Discount Model (Gordon Growth / 2-stage).
 

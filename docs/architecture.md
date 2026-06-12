@@ -80,12 +80,12 @@ Step 0: Quick Triage ──── PASS/WATCH/FULL_RESEARCH
 Every step transition is enforced by `src/cli.py workflow`:
 
 ```bash
-python -m src.cli workflow {dir} start    --step N   # Mark step N in-progress
-python -m src.cli workflow {dir} complete --step N   # Mark step N completed + record artifact
-python -m src.cli workflow {dir} block    --step N   # Block with a reason
+uv run python -m src.cli workflow {dir} start    --step N   # Mark step N in-progress
+uv run python -m src.cli workflow {dir} complete --step N   # Mark step N completed + record artifact
+uv run python -m src.cli workflow {dir} block    --step N   # Block with a reason
 ```
 
-Step N requires all prior steps completed. State is persisted in `workflow_state.json` per workspace.
+Step N requires all prior steps completed. State is persisted in `research_workflow.json` per workspace.
 
 ## Data Flow
 

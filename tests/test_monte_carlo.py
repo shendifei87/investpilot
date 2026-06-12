@@ -19,6 +19,7 @@ from src.analysis.monte_carlo import (
     calc_rrr,
     fit_distribution_from_percentiles,
     run_monte_carlo,
+    validate_mc_p50_alignment,
     verify_assumption_consistency,
 )
 
@@ -440,6 +441,34 @@ class TestAssumptionConsistency:
             )
             assert not result["passed"], "Should fail on a new post-review variable"
             assert any("pe" in v for v in result["violations"])
+
+
+class TestMCP50Alignment:
+    def test_per_year_results_align_with_standard_forecast_model(self):
+        mc_results = {
+            "per_year": {
+                "T+1": {
+                    "eps_rmb": {"p10": 0.8, "p50": 1.0, "p90": 1.2},
+                    "seed": 42,
+                }
+            }
+        }
+        forecast_model = {
+            "statements": {
+                "valuation": [
+                    {
+                        "label": "EPS (Diluted)",
+                        "values": {"T+1": 1.02},
+                    }
+                ]
+            }
+        }
+
+        result = validate_mc_p50_alignment(mc_results, forecast_model, tolerance=5.0)
+
+        assert result["passed"] is True
+        assert result["checks"][0]["metric"] == "eps"
+        assert result["checks"][0]["pct_diff"] == -2.0
 
 
 # ── Calibration ───────────────────────────────────────────────────
